@@ -80,7 +80,11 @@ The automated suite includes a local API integration pass for protected routes, 
 
 ## Deploy
 
-Deploy the project to Vercel or another Node.js host that supports Next.js. Apply the migrations to the production Supabase project first. Set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `DEMO_MODE=false` in the host's environment configuration. Configure Auth redirect URLs for the production domain, use HTTPS, and test the RLS policies with accounts for each role before inviting volunteers.
+This project is prepared for Cloudflare Workers with the OpenNext adapter. Connect the GitHub repository to the existing `iac-media-team` Worker and use `npm run cloudflare:build` as the build command and `npx opennextjs-cloudflare deploy -- --keep-vars` as the deploy command. The committed `wrangler.jsonc` keeps the Worker name and `media.imamalicenter.org` route aligned with that setup. Cloudflare builds a new deployment from each push to the configured production branch.
+
+Configure these Worker runtime variables for a Supabase-backed deployment: `NEXT_PUBLIC_SITE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `DEMO_MODE=false`. Add `SUPABASE_SERVICE_ROLE_KEY` only as an encrypted server-side Worker secret. The public Supabase URL and publishable/anon key are also needed as Cloudflare build variables so they are available while Next.js compiles client-side configuration. Never put the service-role key in build variables or expose it to browser code.
+
+Use a staging Supabase project first. Configure Supabase Auth redirect URLs for the HTTPS app domain, then verify sign-in and protected API permissions with test accounts for each role before inviting volunteers or moving to a production database. This repository intentionally does not seed team accounts or operational records.
 
 Keep database backups enabled in Supabase and periodically verify that a backup can be restored. Export sensitive reports only to an approved location. Uploaded media files are not stored in this app; content records hold external storage links.
 
