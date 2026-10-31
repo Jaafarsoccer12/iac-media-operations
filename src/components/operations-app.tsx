@@ -310,13 +310,18 @@ export function OperationsApp() {
     };
   }, [primeNotificationAudio]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (showLoginFailure = false) => {
     try {
       const settings = await fetch("/api/auth", { cache: "no-store" }).then((r) => r.json());
       setAuthSettings(settings);
       await fetch("/api/operations", { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "process_due_alarms", payload: {} }) }).catch(() => undefined);
       const response = await fetch("/api/bootstrap", { cache: "no-store" });
-      if (!response.ok) { setPayload(null); seenNotificationIds.current = null; notificationUserId.current = null; return; }
+      if (!response.ok) {
+        const failure = await response.json().catch(() => null) as { error?: string } | null;
+        setPayload(null); seenNotificationIds.current = null; notificationUserId.current = null;
+        if (showLoginFailure) setLoginError(failure?.error ?? `Your sign-in was accepted, but the dashboard could not load (HTTP ${response.status}). Please try again.`);
+        return false;
+      }
       const body = await response.json();
       const nextPayload = body as AppPayload;
       setCurrentTime(Date.now());
@@ -342,8 +347,12 @@ export function OperationsApp() {
       try { window.localStorage.setItem(`iac-notifications-seen:${nextUserId}`, JSON.stringify([...(seenNotificationIds.current ?? seen)])); } catch { /* Notifications still work when browser storage is unavailable. */ }
       notificationUserId.current = nextUserId;
       setPayload(nextPayload);
-    } catch {
-      setNotice({ text: "Could not connect to the application server.", error: true });
+      return true;
+    } catch (failure) {
+      const detail = failure instanceof Error ? failure.message : "Could not connect to the application server.";
+      if (showLoginFailure) setLoginError(`Sign-in could not finish loading the app: ${detail}`);
+      else setNotice({ text: "Could not connect to the application server.", error: true });
+      return false;
     } finally { setLoading(false); }
   }, [ringNotification]);
   useEffect(() => {
@@ -457,7 +466,7 @@ export function OperationsApp() {
       const response = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "demo_login", username: form.get("username"), password: form.get("password") }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? "Could not sign in.");
-      await load();
+      await load(true);
     } catch (error) { setLoginError(error instanceof Error ? error.message : "Could not sign in."); }
     finally { setLoginBusy(false); }
   };
@@ -469,7 +478,7 @@ export function OperationsApp() {
       const response = await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "login", identifier: form.get("identifier"), password: form.get("password") }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error ?? "Could not sign in.");
-      await load();
+      await load(true);
     } catch (error) { setLoginError(error instanceof Error ? error.message : "Could not sign in."); }
     finally { setLoginBusy(false); }
   };
