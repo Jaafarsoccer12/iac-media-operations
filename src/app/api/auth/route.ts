@@ -44,11 +44,29 @@ export async function POST(request: NextRequest) {
       email = account.user.email;
     }
     const supabase = await createSupabaseServerClient();
-    const { error } = await supabase.auth.signInWithPassword({ email, password: parsed.data.password });
+    const { data: signedIn, error } = await supabase.auth.signInWithPassword({ email, password: parsed.data.password });
     if (error) return NextResponse.json({ error: "Unable to sign in with those credentials." }, { status: 401 });
-    const { data: { user } } = await supabase.auth.getUser();
-    const { data: profile } = user ? await supabase.from("profiles").select("id, role, active").eq("id", user.id).single() : { data: null };
-    if (!profile?.active) {
+    const user = signedIn.user;
+    if (!user) {
+      await supabase.auth.signOut();
+      return NextResponse.json({ error: "Unable to establish your sign-in session. Try again." }, { status: 401 });
+    }
+
+    // Use the server-side account service for this security check. A failed
+    // user-scoped profile read must not be mistaken for an inactive account.
+    const accountAdmin = hasSupabaseAdminConfig() ? createSupabaseAdminClient() : null;
+    const { data: profile, error: profileError } = accountAdmin
+      ? await accountAdmin.from("profiles").select("id, active").eq("id", user.id).maybeSingle()
+      : await supabase.from("profiles").select("id, active").eq("id", user.id).maybeSingle();
+    if (profileError) {
+      await supabase.auth.signOut();
+      return NextResponse.json({ error: "We could not verify your team account. Contact an administrator." }, { status: 500 });
+    }
+    if (!profile) {
+      await supabase.auth.signOut();
+      return NextResponse.json({ error: "Your team account profile is missing. Contact an administrator." }, { status: 403 });
+    }
+    if (!profile.active) {
       await supabase.auth.signOut();
       return NextResponse.json({ error: "This account is not active. Contact an administrator." }, { status: 403 });
     }
