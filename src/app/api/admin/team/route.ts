@@ -126,9 +126,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: error instanceof Error ? error.message : "The account could not be updated." }, { status: 400 });
     }
   }
-  if (["team_invite", "team_update_member"].includes(parsed.data.action)) {
-    return NextResponse.json({ error: "The connected database still enforces the previous access-role list. Account creation and edits are paused until the approved role update is applied." }, { status: 503 });
-  }
   if (!hasSupabaseAdminConfig()) return NextResponse.json({ error: "Account invitations need the server-side Supabase service key. Add it to the server environment and restart the app." }, { status: 503 });
   const admin = createSupabaseAdminClient();
 
