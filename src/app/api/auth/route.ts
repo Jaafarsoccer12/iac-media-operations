@@ -58,7 +58,7 @@ export async function POST(request: NextRequest) {
     const { data: profile, error: profileError } = accountAdmin
       ? await accountAdmin.from("profiles").select("id, active").eq("id", user.id).maybeSingle()
       : await supabase.from("profiles").select("id, active").eq("id", user.id).maybeSingle();
-    if (profileError) {
+    if (profileError) { console.error("[auth] Team profile verification query failed", { lookup: accountAdmin ? "server-admin" : "signed-in-user", code: profileError.code ?? "unknown" });
       await supabase.auth.signOut();
       return NextResponse.json({ error: "We could not verify your team account. Contact an administrator." }, { status: 500 });
     }
