@@ -6,6 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "cloudflare:build": "opennextjs-cloudflare build",
+    "cloudflare:preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "cloudflare:deploy": "opennextjs-cloudflare build && opennextjs-cloudflare deploy -- --keep-vars",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node --test"
@@ -20,11 +23,18 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "^1.20.13",
     "@types/node": "24.9.2",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "eslint": "9.39.1",
     "eslint-config-next": "16.4.3",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "wrangler": "^4.156.0"
+  },
+  "allowScripts": {
+    "unrs-resolver@1.12.2": true,
+    "esbuild@0.28.2": true,
+    "workerd@1.20261023.1": true
   }
 }
