@@ -46,7 +46,10 @@ export async function GET(request: NextRequest) {
       const result = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: type as (typeof emailOtpTypes)[number] });
       error = result.error;
     } else {
-      error = new Error("Invalid sign-in link.");
+      // Implicit-flow recovery tokens arrive in the URL fragment, which the
+      // browser does not include in the HTTP request. Redirect to the page
+      // that can read that fragment instead of rejecting the link here.
+      return response;
     }
   }
 
