@@ -256,7 +256,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .assignment-person { display: flex; flex: 1; flex-direction: column; gap: 4px; }
 .assignment-person strong { color: #48566c; font-size: 9px; font-weight: 600; }
 .assignment-person small { color: #8d98a7; font-size: 8px; }
-.event-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; margin-top: 12px; }
+.event-actions { grid-column: 1 / -1; display: flex; width: 100%; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; margin-top: 12px; }
+.event-management-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 7px; margin-left: auto; }
 .event-actions .event-action-button { width: auto; height: 25px; min-height: 25px; max-height: 25px; padding: 0 8px; border-radius: 5px; font-size: 9px; line-height: 1; }
 .inline-empty, .subtle-empty { color: #929cac; font-size: 9px; }
 .subtle-empty { padding: 13px 0; }
@@ -998,7 +999,8 @@ html[data-theme="dark"] .notification-arrival { border-color: #3a4b66; color: va
 .calendar-day.outside-month { color: var(--muted); background: rgba(127,145,173,.08); }
 .calendar-day > button { overflow: hidden; padding: 4px 5px; border: 0; border-radius: 4px; color: #274b9a; background: #eaf0ff; font-size: 9px; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 html[data-theme="dark"] .calendar-day > button { color: #c7d7ff; background: #24395e; }
-.rsvp-actions { display: flex; align-items: center; flex-wrap: nowrap; gap: 7px; margin-right: auto; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.rsvp-actions { display: flex; flex: 0 0 auto; align-items: center; flex-wrap: wrap; gap: 7px; margin-right: auto; color: var(--muted); font-size: 10px; white-space: nowrap; }
+.rsvp-buttons { display: flex; flex: 0 0 auto; flex-wrap: nowrap; gap: 7px; }
 .rsvp-actions .button { flex: 0 0 auto; white-space: nowrap; }
 .incident-toolbar { display: flex; justify-content: flex-end; gap: 8px; margin: 12px 0; }
 .incident-full-description { margin: 10px 0; color: var(--ink); font-size: 12px; line-height: 1.6; white-space: pre-wrap; }
