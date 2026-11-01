@@ -934,8 +934,47 @@ function EventsPage({ data, user, searchMatch, openModal, run }: { data: AppData
           <span className="event-badges">{event.livestream && <span title="Livestream required"><Radio size={15} /></span>}{event.recording && <span title="Recording required"><Video size={15} /></span>}{event.photography && <span title="Photography required"><CameraIcon /></span>}</span>
           <span className="event-count"><ClipboardCheck size={15} />{checklistCount} checks</span><StatusPill tone={readiness.tone}>{readiness.label}</StatusPill><ChevronDown size={17} className={`expand-chevron ${open ? "rotated" : ""}`} />
         </button>
-        {open && <div className="event-expanded"><div className="event-description"><p>{event.description || event.publicInfo || "No description has been added."}</p><div className="event-details-grid"><span><small>SETUP · {event.timeZone}</small><strong>{displayTime(event.setupTime)}</strong></span><span><small>EVENT LEAD</small><strong>{eventLead?.fullName ?? "Unassigned"}</strong></span><span><small>PRODUCTION</small><strong>{[event.livestream && "Livestream", event.recording && "Recording", event.photography && "Photography"].filter(Boolean).join(" · ") || "Standard coverage"}</strong></span><span><small>CURRENT PROGRAM PHASE</small><strong>{event.programPhase ?? phaseOptions(data)[0]}</strong></span>{manage && <div className="program-phase-picker-field"><span>Change program phase</span><ProgramPhaseButtons data={data} event={event} onSelect={(phase) => void run("set_event_program_phase", { eventId: event.id, programPhase: phase })} /><small>Required checklist tasks from earlier phases become urgent.</small></div>}<div className="event-crew-assignment"><small>CREW ASSIGNED</small>{eventCrew.length ? <div className="event-crew-list">{eventCrew.map((assignment) => { const person = data.profiles.find((item) => item.id === assignment.userId); return <div className="event-crew-line" key={assignment.id}><span>{canViewCrewNames ? person?.fullName ?? assignment.roleName : assignment.roleName}<small>{assignment.roleName}</small></span>{canViewCrewNames && <StatusPill tone={assignment.response === "Accepted" ? "success" : assignment.response === "Declined" ? "danger" : "warning"}>{assignment.response === "Accepted" ? "Attending" : assignment.response === "Declined" ? "Not attending" : "No response"}</StatusPill>}</div>; })}</div> : <span className="subtle-empty">No crew selected</span>}</div></div>{event.privateNotes && isStaff(user.role) && <div className="private-note"><ShieldCheck size={15} /><span><small>INTERNAL NOTE</small>{event.privateNotes}</span></div>}{event.publicInfo && !isStaff(user.role) && <div className="public-note">{event.publicInfo}</div>}</div>
-          <div className="event-actions">{myAssignment && event.status === "Published" && <div className="rsvp-actions"><span>{myAssignment.response === "Accepted" ? "You’re attending" : myAssignment.response === "Declined" ? "You can’t attend" : "Can you attend?"}</span><div className="rsvp-buttons"><button className={`button button-small ${myAssignment.response === "Accepted" ? "button-primary" : "button-quiet"}`} onClick={() => void run("set_event_response", { assignmentId: myAssignment.id, response: "Accepted" })}>I can attend</button><button className={`button button-small ${myAssignment.response === "Declined" ? "button-danger" : "button-quiet"}`} onClick={() => void run("set_event_response", { assignmentId: myAssignment.id, response: "Declined" })}>I can’t attend</button></div></div>}<div className="event-management-actions">{manage && event.status !== "Completed" && <button className="button button-small button-quiet event-action-button" onClick={() => openModal({ type: "edit-event", id: event.id })}>Edit</button>}{manage && event.status === "Planning" && <button className="button button-small button-primary event-action-button" onClick={() => void run("publish_event", { eventId: event.id })}>Publish</button>}{admin && <button className="button button-small button-danger event-action-button" onClick={() => { if (window.confirm(`Delete “${event.title}”? Its checklist items will be removed. Incident reports will be kept.`)) void run("delete_event", { eventId: event.id }); }}>Delete</button>}<button className="button button-small button-quiet event-action-button" onClick={() => setSelected(null)}>Close</button></div></div>}
+        {open && (
+          <div className="event-expanded">
+            <div className="event-description">
+              <p>{event.description || event.publicInfo || "No description has been added."}</p>
+              <div className="event-details-grid">
+                <span><small>SETUP · {event.timeZone}</small><strong>{displayTime(event.setupTime)}</strong></span>
+                <span><small>EVENT LEAD</small><strong>{eventLead?.fullName ?? "Unassigned"}</strong></span>
+                <span><small>PRODUCTION</small><strong>{[event.livestream && "Livestream", event.recording && "Recording", event.photography && "Photography"].filter(Boolean).join(" · ") || "Standard coverage"}</strong></span>
+                <span><small>CURRENT PROGRAM PHASE</small><strong>{event.programPhase ?? phaseOptions(data)[0]}</strong></span>
+                {manage && <div className="program-phase-picker-field"><span>Change program phase</span><ProgramPhaseButtons data={data} event={event} onSelect={(phase) => void run("set_event_program_phase", { eventId: event.id, programPhase: phase })} /><small>Required checklist tasks from earlier phases become urgent.</small></div>}
+                <div className="event-crew-assignment">
+                  <small>CREW ASSIGNED</small>
+                  {eventCrew.length ? <div className="event-crew-list">{eventCrew.map((assignment) => {
+                    const person = data.profiles.find((item) => item.id === assignment.userId);
+                    return <div className="event-crew-line" key={assignment.id}>
+                      <span>{canViewCrewNames ? person?.fullName ?? assignment.roleName : assignment.roleName}<small>{assignment.roleName}</small></span>
+                      {canViewCrewNames && <StatusPill tone={assignment.response === "Accepted" ? "success" : assignment.response === "Declined" ? "danger" : "warning"}>{assignment.response === "Accepted" ? "Attending" : assignment.response === "Declined" ? "Not attending" : "No response"}</StatusPill>}
+                    </div>;
+                  })}</div> : <span className="subtle-empty">No crew selected</span>}
+                </div>
+              </div>
+              {event.privateNotes && isStaff(user.role) && <div className="private-note"><ShieldCheck size={15} /><span><small>INTERNAL NOTE</small>{event.privateNotes}</span></div>}
+              {event.publicInfo && !isStaff(user.role) && <div className="public-note">{event.publicInfo}</div>}
+            </div>
+            <div className="event-actions">
+              {myAssignment && event.status === "Published" && <div className="rsvp-actions">
+                <span>{myAssignment.response === "Accepted" ? "You’re attending" : myAssignment.response === "Declined" ? "You can’t attend" : "Can you attend?"}</span>
+                <div className="rsvp-buttons">
+                  <button className={"button button-small " + (myAssignment.response === "Accepted" ? "button-primary" : "button-quiet")} onClick={() => void run("set_event_response", { assignmentId: myAssignment.id, response: "Accepted" })}>I can attend</button>
+                  <button className={"button button-small " + (myAssignment.response === "Declined" ? "button-danger" : "button-quiet")} onClick={() => void run("set_event_response", { assignmentId: myAssignment.id, response: "Declined" })}>I can’t attend</button>
+                </div>
+              </div>}
+              <div className="event-management-actions">
+                {manage && event.status !== "Completed" && <button className="button button-small button-quiet event-action-button" onClick={() => openModal({ type: "edit-event", id: event.id })}>Edit</button>}
+                {manage && event.status === "Planning" && <button className="button button-small button-primary event-action-button" onClick={() => void run("publish_event", { eventId: event.id })}>Publish</button>}
+                {admin && <button className="button button-small button-danger event-action-button" onClick={() => { if (window.confirm('Delete “' + event.title + '”? Its checklist items will be removed. Incident reports will be kept.')) void run("delete_event", { eventId: event.id }); }}>Delete</button>}
+                <button className="button button-small button-quiet event-action-button" onClick={() => setSelected(null)}>Close</button>
+              </div>
+            </div>
+          </div>
+        )}
       </section>;
     })}</div>{visibleEvents.length < events.length && <div className="event-show-more"><button className="button button-small button-quiet" onClick={() => setVisibleEventCount((count) => count + 6)}>View more events</button></div>}</> : events.length === 0 ? <EmptyState icon={CalendarDays} title="No matching events" detail="Create a production event or adjust the search." /> : null}
   </>;
