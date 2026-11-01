@@ -916,8 +916,8 @@ async function runSupabase(action: string, payload: Record<string, unknown>, use
       requireCapability(user.accessRoles ?? user.role, "manage_events");
       const values = record(eventSchema, p);
       validateTimezone(values.timeZone);
-      if (!values.startTime || !values.endTime || !values.setupTime || values.venue === "To be confirmed") throw new AppError("Connected mode requires the event schedule and venue before saving.", 503);
-      const { data, error } = await supabase.rpc("create_event_with_notes", { p_title: values.title, p_category: values.category, p_event_date: values.date, p_start_time: values.startTime, p_end_time: values.endTime, p_setup_time: values.setupTime, p_time_zone: values.timeZone, p_venue: values.venue, p_event_lead_id: values.leadId || null, p_description: values.description, p_livestream_required: values.livestream, p_recording_required: values.recording, p_photography_required: values.photography, p_public_information: values.publicInfo, p_private_notes: values.privateNotes });
+      validateEventSchedule(values);
+      const { data, error } = await supabase.rpc("create_event_with_notes", { p_title: values.title, p_category: values.category, p_event_date: values.date, p_start_time: values.startTime || null, p_end_time: values.endTime || null, p_setup_time: values.setupTime || null, p_time_zone: values.timeZone, p_venue: values.venue, p_event_lead_id: values.leadId || null, p_description: values.description, p_livestream_required: values.livestream, p_recording_required: values.recording, p_photography_required: values.photography, p_public_information: values.publicInfo, p_private_notes: values.privateNotes });
       fail(error);
       const assignedUserIds = Array.isArray(p.assignedUserIds) ? [...new Set(p.assignedUserIds.filter((value): value is string => typeof value === "string"))] : null;
       const { error: crewError } = await supabase.rpc("sync_event_crew", { p_event_id: data, p_user_ids: assignedUserIds });
@@ -931,8 +931,8 @@ async function runSupabase(action: string, payload: Record<string, unknown>, use
       requireCapability(user.accessRoles ?? user.role, "manage_events");
       const values = record(eventSchema, p);
       validateTimezone(values.timeZone);
-      if (!values.startTime || !values.endTime || !values.setupTime || values.venue === "To be confirmed") throw new AppError("Connected mode requires the event schedule and venue before saving.", 503);
-      const { error } = await supabase.rpc("update_event_with_notes", { p_event_id: String(p.eventId), p_title: values.title, p_category: values.category, p_event_date: values.date, p_start_time: values.startTime, p_end_time: values.endTime, p_setup_time: values.setupTime, p_time_zone: values.timeZone, p_venue: values.venue, p_event_lead_id: values.leadId || null, p_description: values.description, p_livestream_required: values.livestream, p_recording_required: values.recording, p_photography_required: values.photography, p_public_information: values.publicInfo, p_private_notes: values.privateNotes });
+      validateEventSchedule(values);
+      const { error } = await supabase.rpc("update_event_with_notes", { p_event_id: String(p.eventId), p_title: values.title, p_category: values.category, p_event_date: values.date, p_start_time: values.startTime || null, p_end_time: values.endTime || null, p_setup_time: values.setupTime || null, p_time_zone: values.timeZone, p_venue: values.venue, p_event_lead_id: values.leadId || null, p_description: values.description, p_livestream_required: values.livestream, p_recording_required: values.recording, p_photography_required: values.photography, p_public_information: values.publicInfo, p_private_notes: values.privateNotes });
       fail(error);
       const assignedUserIds = Array.isArray(p.assignedUserIds) ? [...new Set(p.assignedUserIds.filter((value): value is string => typeof value === "string"))] : null;
       const { error: crewError } = await supabase.rpc("sync_event_crew", { p_event_id: String(p.eventId), p_user_ids: assignedUserIds });
