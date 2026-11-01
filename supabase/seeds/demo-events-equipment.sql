@@ -12,6 +12,20 @@ select set_config('request.jwt.claim.sub', (
   limit 1
 ), true);
 
+-- Fill in the schedule for matching published demo events only when the
+-- connected record still has no schedule. Preserve any later edits.
+update public.events as existing
+set start_time=source.start_time,end_time=source.end_time,setup_time=source.setup_time,
+  time_zone=source.time_zone,venue=source.venue
+from (values
+  ('Martyrdom of Lady Fatima - Special Event','2026-11-07'::date,'20:00'::time,'22:00'::time,'19:00'::time,'America/New_York','Main Hall'),
+  ('Martydom Of Lady Fatima - Special Event','2026-11-08'::date,'20:00'::time,'22:00'::time,'19:00'::time,'America/New_York','Main Hall')
+) as source(title,event_date,start_time,end_time,setup_time,time_zone,venue)
+where existing.event_date=source.event_date
+  and lower(trim(existing.title))=lower(trim(source.title))
+  and existing.status='Published'
+  and existing.start_time is null and existing.end_time is null and existing.setup_time is null;
+
 insert into public.events(
   title,category,event_date,start_time,end_time,setup_time,time_zone,venue,event_lead_id,description,
   livestream_required,recording_required,photography_required,public_information,status,created_by
