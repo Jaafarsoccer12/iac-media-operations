@@ -86,7 +86,7 @@ export async function GET() {
       supabase.from("checklist_items").select("*, checklist_instances(event_id, assignment_id)"),
       supabase.from("checklist_templates").select("id, title, category, created_by, created_at, updated_at, checklist_template_versions(id, version, checklist_template_items(id, step_order, label, is_required))").order("created_at", { ascending: false }),
       canManageEquipment ? supabase.from("equipment_templates").select("id,name,items,created_by,created_at,updated_at").order("created_at", { ascending: false }) : Promise.resolve({ data: [], error: null }),
-      supabase.from("sops").select("*, sop_versions(*, sop_steps(*))"),
+      supabase.from("sops").select("*, sop_versions!sop_versions_sop_id_fkey(*, sop_steps(*))"),
       supabase.from("incidents").select("*"),
       supabase.from("notifications").select("*"),
       supabase.from("time_alarms").select("id,user_id,created_by,fire_at,description,triggered_at,cancelled_at,completed_at,created_at").order("fire_at"),
