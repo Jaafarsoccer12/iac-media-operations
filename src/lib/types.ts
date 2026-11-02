@@ -1,4 +1,4 @@
-export type AppRole = "Administrator" | "Director" | "Videographer" | "Video Switcher Operator" | "PTZ Camera Operator" | "Audio Operator" | "Equipment Manager" | "Video Operator" | "Photography";
+export type AppRole = "Administrator" | "Director" | "Videographer" | "Video Switcher Operator" | "Camera Operator" | "PTZ Camera Operator" | "Audio Operator" | "Equipment Manager" | "Video Operator" | "Photography";
 export type EventStatus = "Planning" | "Published" | "Completed" | "Cancelled";
 
 export type Profile = { id: string; fullName: string; email: string; role: AppRole; accessRoles?: AppRole[]; qualification?: string; jobTitle?: string; active?: boolean; username?: string; avatarUrl?: string };

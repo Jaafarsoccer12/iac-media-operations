@@ -10,11 +10,11 @@ import { hasAccessRole, hasManagerAccess, primaryAccessRole } from "@/lib/roles"
 
 export const dynamic = "force-dynamic";
 
-const roleSchema = z.enum(["Administrator", "Director", "Videographer", "Video Switcher Operator", "PTZ Camera Operator", "Audio Operator", "Equipment Manager", "Video Operator", "Photography"]);
+const roleSchema = z.enum(["Administrator", "Director", "Videographer", "Video Switcher Operator", "Camera Operator", "PTZ Camera Operator", "Audio Operator", "Equipment Manager", "Video Operator", "Photography"]);
 const envelopeSchema = z.object({ action: z.string(), payload: z.record(z.string(), z.unknown()).default({}) });
 const usernameSchema = z.string().trim().min(3).max(32).regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/).transform((value) => value.toLowerCase());
 const avatarSchema = z.string().trim().max(400_000).refine((value) => !value || /^https?:\/\/[^\s]+$/i.test(value) || /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/.test(value), "Choose a JPEG photo or use a secure image link.").default("");
-const accessRolesSchema = z.array(roleSchema).min(1).max(9);
+const accessRolesSchema = z.array(roleSchema).min(1).max(10);
 const inviteSchema = z.object({ fullName: z.string().trim().min(1).max(120), email: z.email().trim().max(254), username: usernameSchema, jobTitle: z.string().trim().max(240).default(""), avatarUrl: avatarSchema, accessRoles: accessRolesSchema });
 const demoInviteSchema = z.object({ fullName: z.string().trim().min(1).max(120), username: usernameSchema.optional(), jobTitle: z.string().trim().max(240).default(""), avatarUrl: avatarSchema, accessRoles: accessRolesSchema });
 const updateSchema = z.object({ memberId: z.uuid(), fullName: z.string().trim().min(1).max(120), email: z.email().trim().max(254), username: usernameSchema, jobTitle: z.string().trim().max(240).default(""), avatarUrl: avatarSchema, accessRoles: accessRolesSchema, active: z.boolean() });

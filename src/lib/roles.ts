@@ -1,6 +1,6 @@
 import type { AppRole } from "@/lib/types";
 
-export const APP_ROLES: AppRole[] = ["Administrator", "Director", "Videographer", "Video Switcher Operator", "PTZ Camera Operator", "Audio Operator", "Equipment Manager", "Video Operator", "Photography"];
+export const APP_ROLES: AppRole[] = ["Administrator", "Director", "Videographer", "Video Switcher Operator", "Camera Operator", "PTZ Camera Operator", "Audio Operator", "Equipment Manager", "Video Operator", "Photography"];
 
 const ROLE_PRIORITY: AppRole[] = APP_ROLES;
 const LEGACY_ROLE: Record<string, AppRole> = {

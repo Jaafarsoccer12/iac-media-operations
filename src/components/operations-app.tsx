@@ -17,9 +17,9 @@ type AppPayload = { context: SessionContext; data: AppData };
 type TeamAccount = { id: string; fullName: string; email: string; username: string; jobTitle: string; avatarUrl?: string; role: AppRole; accessRoles?: AppRole[]; active: boolean; qualification?: string; createdAt?: string; lastSignInAt: string | null };
 type ModalState = { type: string; id?: string; member?: TeamAccount; username?: string; secret?: string } | null;
 
-const accessRoles: AppRole[] = ["Administrator", "Director", "Videographer", "Video Switcher Operator", "PTZ Camera Operator", "Audio Operator", "Equipment Manager", "Video Operator", "Photography"];
+const accessRoles: AppRole[] = ["Administrator", "Director", "Videographer", "Video Switcher Operator", "Camera Operator", "PTZ Camera Operator", "Audio Operator", "Equipment Manager", "Video Operator", "Photography"];
 
-const productionPositions = ["PTZ Camera Operator", "Video Operator", "Audio Operator", "Equipment Manager", "Photography", "Video Switcher Operator", "Videography", "Director"];
+const productionPositions = ["Camera Operator", "PTZ Camera Operator", "Video Operator", "Audio Operator", "Equipment Manager", "Photography", "Video Switcher Operator", "Videography", "Director"];
 const categoryDefaults = { events: ["Happy", "Sad", "General"], equipment: ["Camera", "Audio", "Wiring", "Video", "Lighting", "Other"], incidents: ["Equipment damage", "Audio issue", "Video issue", "Stream interruption", "Recording issue", "Network", "Other"], checklists: [...CHECKLIST_PROGRAM_PHASES], sops: ["Production", "Audio", "Video", "Livestream & recording", "Equipment", "Operations", "Safety"] };
 
 function selectedProductionRoles(value?: string) {
@@ -1305,6 +1305,7 @@ function SettingsPage({ data, context, openModal, refreshKey }: { data: AppData;
     Director: "The administrator's operational access, including reports and team accounts. Administrator accounts stay protected.",
     Videographer: "Assigned checklists, camera coverage, equipment viewing, and content workflow.",
     "Video Switcher Operator": "Assigned checklists, video switching workflow, and equipment viewing.",
+    "Camera Operator": "Assigned checklists, camera coverage, and equipment viewing.",
     "PTZ Camera Operator": "Assigned checklists, PTZ camera coverage, and equipment viewing.",
     "Audio Operator": "Assigned checklists, audio coverage, and equipment checkout and return.",
     "Equipment Manager": "Full equipment inventory, checkout, return, and loan history access.",
