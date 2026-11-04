@@ -7,9 +7,8 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { hasAccessRole, hasManagerAccess, normalizeAccessRoles, primaryAccessRole } from "@/lib/roles";
 import { normalizeChecklistProgramPhase, orderChecklistProgramPhases } from "@/lib/checklist-phases.mjs";
 
-export const dynamic = "force-dynamic";
-
-type DbProfile = { id: string; full_name: string; username: string | null; avatar_url: string | null; role: AppRole; access_roles: AppRole[] | null; qualification_status: string; job_title: string | null; active: boolean };
+export const dynamic = "force-dynamic";type DbProfile = { id: string; full_name: string; username: string | null; avatar_url: string | null; role: AppRole; access_roles: AppRole[] | null; qualification_status: string; job_title: string | null; active: boolean };
+type DbAttendanceCrew = Pick<DbProfile, "id" | "role" | "job_title"> & { full_name: string };
 type DbAssignment = { id: string; event_id: string; user_id: string; role_name: string; arrival_time: string | null; instructions: string; response_status: "Pending" | "Accepted" | "Declined"; backup_user_id: string | null; service_history_hidden?: boolean };
 type DbChecklistTemplateTask = { id: string; step_order: number; label: string; is_required: boolean };
 type DbChecklistTemplateVersion = { id: string; version: number; checklist_template_items: DbChecklistTemplateTask[] };
@@ -39,9 +38,10 @@ function filterDemoData(data: AppData, userId: string, roles: AppRole[]): AppDat
   const visibleLoans = equipmentManager ? data.loans : data.loans.filter((item) => item.borrowerId === userId);
   const visibleAssetIds = new Set(visibleLoans.map((item) => item.assetId));
   const loanProfileIds = new Set(visibleLoans.flatMap((item) => [item.borrowerId, item.issuedBy]));
+  const eventCrewProfileIds = new Set(data.assignments.map((item) => item.userId));
   return {
     ...data,
-    profiles: (equipmentManager || director ? data.profiles : data.profiles.filter((item) => item.id === userId || loanProfileIds.has(item.id))).map((item) => ({ ...item, email: "" })),
+    profiles: (equipmentManager || director ? data.profiles : data.profiles.filter((item) => item.id === userId || loanProfileIds.has(item.id) || eventCrewProfileIds.has(item.id))).map((item) => ({ ...item, email: "" })),
     events: data.events.map((item) => ({ ...item, privateNotes: director ? item.privateNotes : "" })),
     assignments: data.assignments,
     assets: equipmentManager ? data.assets : data.assets.filter((asset) => visibleAssetIds.has(asset.id)),
@@ -77,9 +77,10 @@ export async function GET() {
   try {
     const supabase = await createSupabaseServerClient();
     const canManageEquipment = hasManagerAccess(context.user.accessRoles, context.user.role) || hasAccessRole(context.user.accessRoles, context.user.role, "Equipment Manager");
-    const [events, profiles, assignments, assets, loans, checklists, checklistTemplates, equipmentTemplates, sops, incidents, notifications, timeAlarms, content, audit, privateNotes, categories] = await Promise.all([
+    const [events, profiles, attendanceCrew, assignments, assets, loans, checklists, checklistTemplates, equipmentTemplates, sops, incidents, notifications, timeAlarms, content, audit, privateNotes, categories] = await Promise.all([
       supabase.from("events").select("*").order("event_date"),
       supabase.from("profiles").select("id, full_name, username, avatar_url, role, access_roles, qualification_status, job_title, active"),
+      supabase.rpc("list_event_attendance_crew"),
       supabase.from("role_assignments").select("id, event_id, user_id, role_name, arrival_time, instructions, response_status, backup_user_id, service_history_hidden").order("created_at"),
       supabase.from("equipment_assets").select("*"),
       supabase.from("equipment_loans").select("*, equipment_loan_returns(*)"),
@@ -96,6 +97,7 @@ export async function GET() {
       supabase.from("operation_categories").select("category_type, category_name, sort_order").order("category_type").order("sort_order"),
     ]);
     const profileRows = rows<DbProfile>(profiles, "Team");
+    const attendanceProfileRows = rows<DbAttendanceCrew>(attendanceCrew, "Event attendance crew");
     const eventRows = rows<DbEvent>(events, "Events");
     const assignmentRows = rows<DbAssignment>(assignments, "Event crew");
     const assetRows = rows<DbAsset>(assets, "Equipment");
@@ -122,7 +124,7 @@ export async function GET() {
 
     const canManage = hasManagerAccess(context.user.accessRoles, context.user.role);
     const data: AppData = {
-      profiles: profileRows.map((p) => { const accessRoles = normalizeAccessRoles(p.access_roles ?? undefined, p.role); return { id: p.id, fullName: p.full_name, email: "", username: p.username ?? undefined, avatarUrl: p.avatar_url ?? undefined, role: primaryAccessRole(accessRoles, p.role), accessRoles, qualification: p.qualification_status, jobTitle: p.job_title ?? undefined, active: p.active }; }),
+      profiles: [...profileRows.map((p) => { const accessRoles = normalizeAccessRoles(p.access_roles ?? undefined, p.role); return { id: p.id, fullName: p.full_name, email: "", username: p.username ?? undefined, avatarUrl: p.avatar_url ?? undefined, role: primaryAccessRole(accessRoles, p.role), accessRoles, qualification: p.qualification_status, jobTitle: p.job_title ?? undefined, active: p.active }; }), ...attendanceProfileRows.filter((p) => !profileRows.some((profile) => profile.id === p.id)).map((p) => { const accessRoles = normalizeAccessRoles(undefined, p.role); return { id: p.id, fullName: p.full_name, email: "", role: primaryAccessRole(accessRoles, p.role), accessRoles, jobTitle: p.job_title ?? undefined }; })],
       events: eventRows.map((e) => ({ id: e.id, title: e.title, category: e.category, date: e.event_date, startTime: e.start_time ?? "", endTime: e.end_time ?? "", setupTime: e.setup_time ?? "", timeZone: e.time_zone, venue: e.venue, leadId: e.event_lead_id ?? "", description: e.description ?? "", livestream: e.livestream_required, recording: e.recording_required, photography: e.photography_required, status: e.status, publicInfo: e.public_information ?? "", privateNotes: noteByEvent.get(e.id) ?? "", programPhase: normalizeChecklistProgramPhase(e.current_program_phase) ?? "Pre-event" })),
       assignments: assignmentRows.map((assignment) => ({ id: assignment.id, eventId: assignment.event_id, userId: assignment.user_id, roleName: assignment.role_name, arrivalTime: assignment.arrival_time ?? undefined, instructions: assignment.instructions ?? "", response: assignment.response_status, backupUserId: assignment.backup_user_id ?? undefined, serviceHistoryHidden: assignment.service_history_hidden ?? false })),
       assets: assetRows.map((a) => ({ id: a.id, assetCode: a.asset_code, name: a.name, category: a.category, location: a.storage_location ?? "", quantity: a.quantity ?? 1, condition: a.condition, status: a.status, model: a.model ?? "", serial: a.serial_number ?? "", notes: a.notes ?? "", currentCustodianId: a.current_custodian_id ?? undefined })),
