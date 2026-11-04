@@ -31,6 +31,27 @@ export async function GET(request: Request) {
   if (!context) return messageError("Sign in to use crew chat.", 401);
 
   const params = new URL(request.url).searchParams;
+  if (params.get("summary") === "1") {
+    const sinceParam = params.get("since");
+    const since = sinceParam ? new Date(sinceParam) : null;
+    if (!since || !Number.isFinite(since.getTime())) return messageError("A valid message timestamp is required.");
+
+    if (context.mode === "demo") {
+      const data = await readDemoStore();
+      const count = (data.chatMessages ?? []).filter((message) => message.senderId !== context.user.id
+        && (message.conversationType === "all" || (message.conversationType === "direct" && message.recipientId === context.user.id))
+        && Date.parse(message.createdAt) > since.getTime()).length;
+      return NextResponse.json({ count });
+    }
+
+    const supabase = await createSupabaseServerClient();
+    const { count, error } = await supabase.from("crew_chat_messages").select("id", { count: "exact", head: true })
+      .or(`and(conversation_type.eq.all,sender_id.neq.${context.user.id}),and(conversation_type.eq.direct,recipient_id.eq.${context.user.id})`)
+      .gt("created_at", since.toISOString());
+    if (error) return messageError(error.message, 503);
+    return NextResponse.json({ count: count ?? 0 });
+  }
+
   const parsed = conversationSchema.safeParse({ conversationType: params.get("conversationType") ?? "all", recipientId: params.get("recipientId") ?? undefined });
   if (!parsed.success) return messageError(parsed.error.issues.map((issue) => issue.message).join(" "));
   const { conversationType, recipientId } = parsed.data;

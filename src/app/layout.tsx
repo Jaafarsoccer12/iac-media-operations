@@ -1,5 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import { PwaRegistration } from "@/components/pwa-registration";
+import { AmbientEffects } from "@/components/ambient-effects";
+import "@fontsource-variable/inter";
+import "@fontsource-variable/space-grotesk";
+import "@fontsource/instrument-serif/latin-400.css";
+import "@fontsource/instrument-serif/latin-400-italic.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -20,5 +25,5 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body><PwaRegistration />{children}</body></html>;
+  return <html lang="en"><body><PwaRegistration /><AmbientEffects />{children}</body></html>;
 }
