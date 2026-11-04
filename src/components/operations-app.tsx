@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import NextImage from "next/image";
 import {
   Activity, AlarmClock, AlertTriangle, ArrowDownToLine, ArrowRight, Bell, BookOpen, CalendarDays, Check,
   CheckCircle2, ChevronDown, ClipboardCheck, Clock3, FileText, HardDrive, Headphones, LayoutDashboard,
-  LogOut, Menu, MessageCircle, Moon, Pencil, Plus, Radio, Search, Send, Settings2, ShieldCheck, Sun, Trash2, Users, Video, Wrench, X,
+  LogOut, Menu, MessageCircle, Moon, Pencil, Plus, Radio, Search, Send, Settings2, ShieldCheck, Sparkles, Sun, Trash2, Users, Video, Wrench, X,
 } from "lucide-react";
 import { can, eventReadiness } from "@/lib/policy.mjs";
 import { CHECKLIST_PROGRAM_PHASES, normalizeChecklistProgramPhase, orderChecklistProgramPhases } from "@/lib/checklist-phases.mjs";
@@ -107,6 +107,11 @@ function formatAlarmCountdown(fireAt: string, nowMs: number) {
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
   return hours ? `${hours}h ${minutes}m ${seconds}s remaining` : `${minutes}m ${seconds}s remaining`;
+}
+function alarmCountdownHue(remainingMs: number) {
+  if (remainingMs > 5 * 60_000) return 215;
+  if (remainingMs <= 60_000) return 4;
+  return Math.round(4 + 27 * ((remainingMs - 60_000) / (4 * 60_000)));
 }
 async function showPhoneAlarmNotification(alarmId: string, description: string) {
   if (typeof window === "undefined" || !("Notification" in window) || window.Notification.permission !== "granted" || !("serviceWorker" in navigator)) return;
@@ -248,6 +253,8 @@ export function OperationsApp() {
   const [teamRefresh, setTeamRefresh] = useState(0);
   const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
   const [notificationAlert, setNotificationAlert] = useState<{ id: string; title: string; detail: string; alarmId?: string } | null>(null);
+  const [chatUnreadCount, setChatUnreadCount] = useState(0);
+  const [animatedNavItems, setAnimatedNavItems] = useState<PageKey[]>([]);
   const [loginError, setLoginError] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
   const seenNotificationIds = useRef<Set<string> | null>(null);
@@ -255,6 +262,8 @@ export function OperationsApp() {
   const alarmReminderAt = useRef(new Map<string, number>());
   const notificationAudio = useRef<AudioContext | null>(null);
   const notificationSoundPending = useRef(false);
+  const priorNavCounts = useRef<{ userId: string; chat: number; checklists: number; notifications: number } | null>(null);
+  const navAnimationTimer = useRef<number | null>(null);
   const darkMode = useSyncExternalStore(subscribeToTheme, getStoredDarkMode, () => false);
 
   useEffect(() => {
@@ -363,6 +372,47 @@ export function OperationsApp() {
     document.documentElement.dataset.theme = darkMode ? "dark" : "light";
   }, [darkMode]);
   const activeUserId = payload?.context.user.id;
+  useEffect(() => {
+    if (!activeUserId) { setChatUnreadCount(0); return; }
+    const storageKey = `iac-chat-last-seen:${activeUserId}`;
+    let lastSeen = 0;
+    try {
+      const saved = Number(window.localStorage.getItem(storageKey));
+      lastSeen = Number.isFinite(saved) && saved > 0 ? saved : Date.now();
+      window.localStorage.setItem(storageKey, String(lastSeen));
+    } catch { lastSeen = Date.now(); }
+
+    const markChatSeen = () => {
+      lastSeen = Date.now();
+      try { window.localStorage.setItem(storageKey, String(lastSeen)); } catch { /* Keep the in-memory timestamp for this session. */ }
+      setChatUnreadCount(0);
+    };
+    if (page === "chat") markChatSeen();
+    let checkingMessages = false;
+    const refreshUnreadCount = async () => {
+      if (page === "chat" || document.visibilityState !== "visible" || checkingMessages) return;
+      checkingMessages = true;
+      try {
+        const params = new URLSearchParams({ summary: "1", since: new Date(lastSeen).toISOString() });
+        const response = await fetch(`/api/chat?${params.toString()}`, { cache: "no-store" });
+        if (!response.ok) return;
+        const body = await response.json() as { count?: number };
+        setChatUnreadCount(Math.max(0, Number(body.count) || 0));
+      } catch { /* The next poll will retry when the server is available. */ }
+      finally { checkingMessages = false; }
+    };
+    void refreshUnreadCount();
+    const timer = window.setInterval(() => {
+      if (page === "chat") markChatSeen();
+      else void refreshUnreadCount();
+    }, 5_000);
+    const onVisibility = () => { if (document.visibilityState === "visible") void refreshUnreadCount(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisibility); };
+  }, [activeUserId, page]);
+
+  useEffect(() => () => { if (navAnimationTimer.current !== null) window.clearTimeout(navAnimationTimer.current); }, []);
+
   useEffect(() => {
     if (!activeUserId) return;
     let checkingAlarm = false;
@@ -569,6 +619,32 @@ export function OperationsApp() {
   const context = payload?.context;
   const data = payload?.data ?? emptyData;
   const allowedNav = useMemo(() => navItems.filter((item) => !item.needs || context?.capabilities.includes(item.needs)), [context]);
+  const navCounts = useMemo(() => {
+    const user = context?.user;
+    if (!user) return { chat: chatUnreadCount, checklists: 0, notifications: 0 };
+    const managerView = hasManagerAccess(user.accessRoles, user.role);
+    const cutoff = currentTime - 24 * 60 * 60 * 1000;
+    return {
+      chat: chatUnreadCount,
+      checklists: data.checklistItems.filter((item) => (managerView || item.userId === user.id) && (!managerView || !item.clearedFromChecklist) && item.status !== "Complete").length,
+      notifications: data.notifications.filter((item) => item.userId === user.id && !item.read && (!managerView || Date.parse(item.date) >= cutoff)).length,
+    };
+  }, [context, data, chatUnreadCount, currentTime]);
+  useEffect(() => {
+    const userId = context?.user.id;
+    if (!userId) { priorNavCounts.current = null; return; }
+    const previous = priorNavCounts.current;
+    priorNavCounts.current = { userId, ...navCounts };
+    if (!previous || previous.userId !== userId) return;
+    const arrived: PageKey[] = [];
+    if (navCounts.chat > previous.chat) arrived.push("chat");
+    if (navCounts.checklists > previous.checklists) arrived.push("checklists");
+    if (navCounts.notifications > previous.notifications) arrived.push("notifications");
+    if (!arrived.length) return;
+    setAnimatedNavItems(arrived);
+    if (navAnimationTimer.current !== null) window.clearTimeout(navAnimationTimer.current);
+    navAnimationTimer.current = window.setTimeout(() => setAnimatedNavItems([]), 1_250);
+  }, [context?.user.id, navCounts]);
 
   if (loading && !authSettings) return <div className="boot-screen"><BrandMark large /><span className="boot-pulse" />Preparing media operations</div>;
   if (!context) return <SignInScreen settings={authSettings} loading={loginBusy} error={loginError} onDemoAccount={signInDemoAccount} onSupabase={signInSupabase} darkMode={darkMode} onToggleTheme={() => setDarkMode((value) => !value)} />;
@@ -577,6 +653,9 @@ export function OperationsApp() {
   const manager = hasManagerAccess(user.accessRoles, user.role);
   const nextPersonalAlarm = data.timeAlarms.filter((alarm) => alarm.userId === user.id && !alarm.cancelledAt && !alarm.completedAt).sort((a, b) => a.fireAt.localeCompare(b.fireAt))[0];
   const personalAlarmOverdue = Boolean(nextPersonalAlarm && (nextPersonalAlarm.triggeredAt || Date.parse(nextPersonalAlarm.fireAt) <= alarmDisplayNow));
+  const personalAlarmRemainingMs = nextPersonalAlarm ? Date.parse(nextPersonalAlarm.fireAt) - alarmDisplayNow : Number.POSITIVE_INFINITY;
+  const personalAlarmNearDue = Boolean(nextPersonalAlarm && !personalAlarmOverdue && personalAlarmRemainingMs > 0 && personalAlarmRemainingMs <= 5 * 60_000);
+  const personalAlarmCritical = personalAlarmNearDue && personalAlarmRemainingMs <= 60_000;
   const notificationCutoff = currentTime - 24 * 60 * 60 * 1000;
   const unreadCount = data.notifications.filter((item) => item.userId === user.id && !item.read && (!manager || Date.parse(item.date) >= notificationCutoff)).length;
   const openIncidentCount = data.incidents.filter((item) => !["Resolved", "Closed"].includes(item.status)).length;
@@ -605,22 +684,27 @@ export function OperationsApp() {
       <div className="brand-lockup"><BrandMark /><div><strong>Media Operations</strong><span>IMAM ALI CENTER</span></div><button className="icon-button mobile-close" onClick={() => setMobileNav(false)} aria-label="Close menu"><X size={18} /></button></div>
       <div className="workspace-label">WORKSPACE</div>
       <nav className="primary-nav" aria-label="Main navigation">
-        {allowedNav.map(({ key, label, icon: Icon }) => <button key={key} className={`nav-link ${page === key ? "active" : ""}`} onClick={() => { setPage(key); setMobileNav(false); }}><Icon size={17} strokeWidth={1.8} /><span>{label}</span>{key === "notifications" && unreadCount > 0 && <b className="nav-count">{unreadCount}</b>}{key === "incidents" && openIncidentCount > 0 && <b className="nav-count incident-nav-count" aria-label={`${openIncidentCount} open incidents`}>{openIncidentCount}</b>}</button>)}
+        {allowedNav.map(({ key, label, icon: Icon }) => {
+          const count = key === "chat" ? navCounts.chat : key === "checklists" ? navCounts.checklists : key === "notifications" ? unreadCount : 0;
+          const countLabel = key === "chat" ? "unread messages" : key === "checklists" ? "unfinished checklist items" : "unread notifications";
+          const isArriving = animatedNavItems.includes(key);
+          return <button key={key} title={count > 0 ? `${label} · ${count} ${countLabel}` : label} aria-label={count > 0 ? `${label}, ${count} ${countLabel}` : label} className={`nav-link ${page === key ? "active" : ""} ${isArriving ? "is-arriving" : ""}`} onClick={() => { setPage(key); setMobileNav(false); }}><Icon size={18} strokeWidth={2} /><span>{label}</span>{count > 0 && <b className={`nav-count ${isArriving ? "is-arriving" : ""}`}>{count > 99 ? "99+" : count}</b>}{key === "incidents" && openIncidentCount > 0 && <b className="nav-count incident-nav-count" aria-label={`${openIncidentCount} open incidents`}>{openIncidentCount}</b>}</button>;
+        })}
       </nav>
       <div className="sidebar-bottom"><div className={`connection ${context.mode === "demo" ? "demo-connection" : ""}`}><span className="connection-dot" /><span>{context.mode === "demo" ? "Local accounts" : "Supabase connected"}</span></div><div className="sidebar-user"><ProfileAvatar name={user.fullName} src={user.avatarUrl} className="avatar" /><div className="user-lines"><strong>{user.fullName}</strong><span>{user.role}</span></div><button className="icon-button signout" title="Sign out" onClick={signOut} aria-label="Sign out"><LogOut size={16} /></button></div></div>
     </aside>
     {mobileNav && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMobileNav(false)} />}
     <div className="main-column">
-      <header className="topbar"><div className="topbar-left"><button className="icon-button menu-toggle" aria-label="Open menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><span className="breadcrumb">IAC <span>/</span> {pageTitles[page]}</span></div><div className="topbar-right"><label className="global-search"><Search size={16} /><input aria-label="Search visible records" placeholder="Search visible records" value={search} onChange={(event) => setSearch(event.target.value)} /><kbd>⌘ K</kbd></label><ThemeToggle darkMode={darkMode} onToggle={() => setDarkMode((value) => !value)} /><button className={`icon-button notification-button ${notificationAlert ? "is-alerting" : ""}`} onClick={() => setPage("notifications")} title="Notifications" aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ""}`}><Bell size={18} />{unreadCount > 0 && <i />}</button><button type="button" className="top-profile-button" title="My profile" aria-label="Open my profile" onClick={() => setModal({ type: "profile" })}><ProfileAvatar name={user.fullName} src={user.avatarUrl} className="top-avatar" /></button></div></header>
-      <main className="main-content"><div className="page-heading"><div><div className="eyebrow">IMAM ALI CENTER · MEDIA TEAM</div><h1>{pageTitles[page]}</h1></div><div className="page-heading-meta"><span className="today-label">{new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</span>{page === "events" && can(user.accessRoles ?? user.role, "manage_events") && <button className="button button-primary" onClick={() => setModal({ type: "create-event" })}><Plus size={16} />Create event</button>}{page === "checklists" && hasManagerAccess(user.accessRoles, user.role) && <button className="button button-primary" onClick={() => setModal({ type: "create-checklist-item" })}><Plus size={16} />Add checklist item</button>}{page === "equipment" && can(user.accessRoles ?? user.role, "manage_equipment") && <button className="button button-primary" onClick={() => setModal({ type: "create-asset" })}><Plus size={16} />Add asset</button>}{page === "incidents" && can(user.accessRoles ?? user.role, "report_incidents") && <button className="button button-primary" onClick={() => setModal({ type: "report-incident" })}><Plus size={16} />Report issue</button>}{page === "sops" && can(user.accessRoles ?? user.role, "manage_sops") && <button className="button button-primary" onClick={() => setModal({ type: "create-sop" })}><Plus size={16} />New SOP</button>}</div></div>
+      <header className="topbar"><div className="topbar-left"><button className="icon-button menu-toggle" aria-label="Open menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><span className="breadcrumb">IAC <span>/</span> {pageTitles[page]}</span></div><div className="topbar-right"><label className="global-search"><Search size={16} /><input aria-label="Search visible records" placeholder="Search visible records" value={search} onChange={(event) => setSearch(event.target.value)} /><kbd>⌘ K</kbd></label><ThemeToggle darkMode={darkMode} onToggle={() => setDarkMode((value) => !value)} /><button className={`icon-button notification-button ${notificationAlert ? "is-alerting" : ""}`} onClick={() => setPage("notifications")} title="Notifications" aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ""}`}><Bell size={18} />{unreadCount > 0 && <b className="top-notification-count">{unreadCount > 99 ? "99+" : unreadCount}</b>}</button><button type="button" className="top-profile-button" title="My profile" aria-label="Open my profile" onClick={() => setModal({ type: "profile" })}><ProfileAvatar name={user.fullName} src={user.avatarUrl} className="top-avatar" /></button></div></header>
+      <main key={page} className="main-content page-transition"><div className="page-heading"><div><div className="hero-badge page-heading-badge"><Sparkles size={12} /> OPERATIONS HUB — IN SYNC</div><div className="eyebrow">IMAM ALI CENTER · MEDIA TEAM</div><h1>{pageTitles[page]}</h1></div><div className="page-heading-meta"><span className="today-label">{new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</span>{page === "events" && can(user.accessRoles ?? user.role, "manage_events") && <button className="button button-primary" onClick={() => setModal({ type: "create-event" })}><Plus size={16} />Create event</button>}{page === "checklists" && hasManagerAccess(user.accessRoles, user.role) && <button className="button button-primary" onClick={() => setModal({ type: "create-checklist-item" })}><Plus size={16} />Add checklist item</button>}{page === "equipment" && can(user.accessRoles ?? user.role, "manage_equipment") && <button className="button button-primary" onClick={() => setModal({ type: "create-asset" })}><Plus size={16} />Add asset</button>}{page === "incidents" && can(user.accessRoles ?? user.role, "report_incidents") && <button className="button button-primary" onClick={() => setModal({ type: "report-incident" })}><AlertTriangle size={15} />Report issue</button>}{page === "sops" && can(user.accessRoles ?? user.role, "manage_sops") && <button className="button button-primary" onClick={() => setModal({ type: "create-sop" })}><Plus size={16} />New SOP</button>}</div></div>
 
         {loading && <div className="refresh-line"><span />Refreshing records…</div>}
         {search.trim() ? <GlobalSearchResults data={data} query={search.trim()} setPage={setPage} clear={() => setSearch("")} /> : renderPage()}
       </main>
     </div>
-    {nextPersonalAlarm && alarmDisplayNow > 0 && <button type="button" className={`alarm-countdown-widget ${personalAlarmOverdue ? "is-overdue" : ""}`} onClick={() => setPage("time")} aria-label={`${personalAlarmOverdue ? "Overdue alarm" : "Alarm countdown"}: ${nextPersonalAlarm.description}`}>
+    {nextPersonalAlarm && alarmDisplayNow > 0 && <button type="button" className={`alarm-countdown-widget ${personalAlarmOverdue ? "is-overdue" : ""} ${personalAlarmNearDue ? "is-near-due" : ""} ${personalAlarmCritical ? "is-critical" : ""}`} style={{ "--alarm-hue": alarmCountdownHue(personalAlarmRemainingMs) } as CSSProperties} onClick={() => setPage("time")} aria-label={`${personalAlarmOverdue ? "Overdue alarm" : "Alarm countdown"}: ${nextPersonalAlarm.description}`}>
       <span className="alarm-countdown-widget-icon"><AlarmClock size={19} /></span>
-      <span className="alarm-countdown-widget-copy"><small>{personalAlarmOverdue ? "ALARM OVERDUE" : "TIME REMAINING"}</small><strong>{nextPersonalAlarm.description}</strong><em>{personalAlarmOverdue ? "Task needs completion" : formatAlarmCountdown(nextPersonalAlarm.fireAt, alarmDisplayNow)}</em></span>
+      <span className="alarm-countdown-widget-copy"><small>{personalAlarmOverdue ? "ALARM OVERDUE" : "TIME REMAINING"}</small><strong>{nextPersonalAlarm.description}</strong><em style={{ "--alarm-hue": alarmCountdownHue(personalAlarmRemainingMs) } as CSSProperties}>{personalAlarmOverdue ? "Task needs completion" : formatAlarmCountdown(nextPersonalAlarm.fireAt, alarmDisplayNow)}</em></span>
       <ArrowRight size={16} />
     </button>}
     {notificationAlert?.alarmId ? <div key={notificationAlert.id} className="notification-arrival alarm-notification-arrival" role="status"><span className="notification-arrival-icon"><AlarmClock size={25} /></span><span><strong>Alarm is due</strong><small>{notificationAlert.detail} · Complete the task to stop reminders.</small></span><button className="button button-primary alarm-arrival-complete" type="button" onClick={() => { setNotificationAlert(null); void doAction("complete_time_alarm", { alarmId: notificationAlert.alarmId }); }}>Task completed</button></div> : notificationAlert && <button type="button" key={notificationAlert.id} className="notification-arrival" role="status" onClick={() => { setPage("notifications"); setNotificationAlert(null); }}><span className="notification-arrival-icon"><Bell size={24} /></span><span><strong>New notification</strong><small>{notificationAlert.title} · {notificationAlert.detail}</small></span><span className="notification-arrival-action">View</span></button>}
@@ -656,13 +740,13 @@ function ThemeToggle({ darkMode, onToggle }: { darkMode: boolean; onToggle: () =
 }
 
 function SignInScreen({ settings, loading, error, onDemoAccount, onSupabase, darkMode, onToggleTheme }: { settings: { demoAvailable: boolean; supabaseConfigured: boolean } | null; loading: boolean; error: string; onDemoAccount: (event: FormEvent<HTMLFormElement>) => void; onSupabase: (event: FormEvent<HTMLFormElement>) => void; darkMode: boolean; onToggleTheme: () => void }) {
-  return <div className="login-screen"><ThemeToggle darkMode={darkMode} onToggle={onToggleTheme} /><div className="login-panel"><div className="login-brand"><BrandMark large /><div className="eyebrow">IMAM ALI CENTER</div><h1>Media Operations</h1><p className="login-subtitle">One place for the team behind every broadcast.</p></div>
+  return <div className="login-screen"><ThemeToggle darkMode={darkMode} onToggle={onToggleTheme} /><div className="login-panel"><div className="login-brand"><BrandMark large /><div className="hero-badge"><Sparkles size={12} /> IAC MEDIA OPS — BUILT TO FLOW</div><div className="eyebrow">IMAM ALI CENTER · MEDIA TEAM</div><h1 className="gradient-heading">Media Operations</h1><p className="login-subtitle">One connected workspace — from prep to final cue.</p></div>
     {settings?.demoAvailable && <><div className="demo-login-note"><Activity size={17} /><span><strong>Team sign in</strong><br />Use the username and password given to you by the administrator.</span></div><form className="login-form" onSubmit={onDemoAccount}><label>Username<input name="username" autoComplete="username" required /></label><label>Password<input name="password" type="password" autoComplete="current-password" required /></label><button className="button button-primary full-button" disabled={loading}>{loading ? "Signing in…" : "Sign in"}</button></form></>}
     {settings?.supabaseConfigured && <form className="login-form" onSubmit={onSupabase}><label>Username or sign-in email<input name="identifier" autoComplete="username" required /></label><label>Password<input name="password" type="password" autoComplete="current-password" required /></label><button className="button button-primary full-button" disabled={loading}>{loading ? "Signing in…" : "Sign in securely"}</button></form>}
     {error && <p className="login-error" role="alert">{error}</p>}
     {!settings?.demoAvailable && !settings?.supabaseConfigured && <EmptyState title="Sign-in is not configured" detail="Set Supabase credentials or start the development server with local demo mode enabled." />}
     <div className="login-footer"><ShieldCheck size={15} /> Role permissions are enforced by server actions and database policies.</div>
-  </div><div className="login-side"><div className="login-side-mark"><Radio size={21} /> IAC MEDIA TEAM</div><div className="login-side-content"><div className="live-indicator"><span /> OPERATIONS DESK</div><h2>Ready when<br />the lights go on.</h2><p>Schedules, people, equipment and production checks, together.</p><div className="signal-bars"><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /></div></div><div className="login-side-foot">LOCAL TIMEZONE · {Intl.DateTimeFormat().resolvedOptions().timeZone}</div></div></div>;
+  </div><div className="login-side"><div className="login-side-mark"><Radio size={21} /> IAC MEDIA TEAM</div><div className="login-side-content"><div className="hero-badge hero-badge-dark"><Sparkles size={12} /> PRODUCTION, ORCHESTRATED — FOR IAC</div><div className="live-indicator"><span /> OPERATIONS DESK</div><h2>Move every moment — <em>in sync</em>.</h2><p>Leverage one seamless workflow — align the crew, elevate every program, and keep production moving.</p><div className="hero-icon-row"><div className="hero-icon-box"><span><CalendarDays size={17} /></span><strong>Align</strong><small>People + programs</small></div><div className="hero-icon-box"><span><Headphones size={17} /></span><strong>Amplify</strong><small>Audio + visuals</small></div><div className="hero-icon-box"><span><Radio size={17} /></span><strong>Activate</strong><small>Production flow</small></div></div><div className="signal-bars"><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /><span /></div></div><div className="login-side-foot">LOCAL TIMEZONE — {Intl.DateTimeFormat().resolvedOptions().timeZone}</div></div></div>;
 }
 
 function PageIntro({ title, detail, children }: { title: string; detail: string; children?: ReactNode }) { return <div className="section-intro"><div><h2>{title}</h2><p>{detail}</p></div>{children}</div>; }
@@ -752,9 +836,12 @@ function TimePage({ data, user, run }: { data: AppData; user: Profile; run: (act
         {alarms.length ? <div className="time-alarm-list">{alarms.map((alarm) => {
           const recipient = data.profiles.find((profile) => profile.id === alarm.userId);
           const status = alarm.completedAt ? "Task completed" : alarm.cancelledAt ? "Cancelled" : alarm.triggeredAt ? "Due · needs completion" : "Scheduled";
-          return <article key={alarm.id} className={`time-alarm-card ${alarm.cancelledAt ? "is-cancelled" : ""} ${alarm.completedAt ? "is-completed" : ""} ${alarm.triggeredAt && !alarm.completedAt && !alarm.cancelledAt ? "is-due" : ""}`}>
+          const remainingMs = Date.parse(alarm.fireAt) - clockMs;
+          const nearDue = clockMs > 0 && !alarm.triggeredAt && !alarm.cancelledAt && !alarm.completedAt && remainingMs > 0 && remainingMs <= 5 * 60_000;
+          const critical = nearDue && remainingMs <= 60_000;
+          return <article key={alarm.id} className={`time-alarm-card ${alarm.cancelledAt ? "is-cancelled" : ""} ${alarm.completedAt ? "is-completed" : ""} ${alarm.triggeredAt && !alarm.completedAt && !alarm.cancelledAt ? "is-due" : ""} ${nearDue ? "is-near-due" : ""} ${critical ? "is-critical" : ""}`} style={{ "--alarm-hue": alarmCountdownHue(remainingMs) } as CSSProperties}>
             <span className="time-alarm-card-icon"><AlarmClock size={16} /></span>
-            <div className="time-alarm-card-copy"><strong>{alarm.description}</strong><span>{new Intl.DateTimeFormat(undefined, { timeZone: sharedTimeZone, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(alarm.fireAt))} · Eastern time</span>{manager && <small>For {recipient?.fullName ?? "Team member"}</small>}{!alarm.cancelledAt && !alarm.triggeredAt && !alarm.completedAt && <span className="time-alarm-countdown">{clockMs ? formatAlarmCountdown(alarm.fireAt, clockMs) : "Syncing countdown…"}</span>}{alarm.triggeredAt && !alarm.completedAt && !alarm.cancelledAt && <strong className="time-alarm-needs-completion">Press “Task completed” when you finish.</strong>}</div>
+            <div className="time-alarm-card-copy"><strong>{alarm.description}</strong><span>{new Intl.DateTimeFormat(undefined, { timeZone: sharedTimeZone, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(alarm.fireAt))} · Eastern time</span>{manager && <small>For {recipient?.fullName ?? "Team member"}</small>}{!alarm.cancelledAt && !alarm.triggeredAt && !alarm.completedAt && <span className={`time-alarm-countdown ${nearDue ? "is-near-due" : ""}`} style={{ "--alarm-hue": alarmCountdownHue(remainingMs) } as CSSProperties}>{clockMs ? formatAlarmCountdown(alarm.fireAt, clockMs) : "Syncing countdown…"}</span>}{alarm.triggeredAt && !alarm.completedAt && !alarm.cancelledAt && <strong className="time-alarm-needs-completion">Press “Task completed” when you finish.</strong>}</div>
             <span className={`time-alarm-status ${alarm.triggeredAt && !alarm.completedAt ? "is-triggered" : ""} ${alarm.completedAt ? "is-completed" : ""}`}>{status}</span>
             {alarm.triggeredAt && !alarm.completedAt && !alarm.cancelledAt && alarm.userId === user.id && <button className="button button-small button-primary time-alarm-complete" type="button" onClick={() => void run("complete_time_alarm", { alarmId: alarm.id })}><CheckCircle2 size={14} />Task completed</button>}
             {!alarm.cancelledAt && !alarm.triggeredAt && (manager || alarm.userId === user.id) && <button className="icon-button" type="button" aria-label={`Cancel alarm: ${alarm.description}`} title="Cancel alarm" onClick={() => void run("cancel_time_alarm", { alarmId: alarm.id })}><X size={15} /></button>}
@@ -776,6 +863,9 @@ function CrewChatPage({ user }: { user: Profile }) {
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const knownMessageIds = useRef<Set<string> | null>(null);
+  const [freshMessageIds, setFreshMessageIds] = useState<Set<string>>(() => new Set());
+  const freshMessageTimer = useRef<number | null>(null);
   const recipient = members.find((member) => member.id === recipientId);
 
   useEffect(() => {
@@ -786,6 +876,8 @@ function CrewChatPage({ user }: { user: Profile }) {
     }
     let active = true;
     let firstLoad = true;
+    knownMessageIds.current = null;
+    setFreshMessageIds(new Set());
     const refresh = async () => {
       if (firstLoad) setLoading(true);
       const params = new URLSearchParams({ conversationType });
@@ -795,8 +887,19 @@ function CrewChatPage({ user }: { user: Profile }) {
         const body = await response.json() as { members?: ChatMember[]; messages?: ChatMessage[]; error?: string };
         if (!response.ok) throw new Error(body.error || "Chat could not be loaded.");
         if (!active) return;
+        const nextMessages = body.messages ?? [];
+        const previousIds = knownMessageIds.current;
+        if (previousIds) {
+          const arrivals = nextMessages.filter((message) => !previousIds.has(message.id)).map((message) => message.id);
+          if (arrivals.length) {
+            setFreshMessageIds((current) => new Set([...current, ...arrivals]));
+            if (freshMessageTimer.current !== null) window.clearTimeout(freshMessageTimer.current);
+            freshMessageTimer.current = window.setTimeout(() => setFreshMessageIds(new Set()), 900);
+          }
+        }
+        knownMessageIds.current = new Set(nextMessages.map((message) => message.id));
         setMembers(body.members ?? []);
-        setMessages(body.messages ?? []);
+        setMessages(nextMessages);
         setError("");
       } catch (cause) {
         if (active) setError(cause instanceof Error ? cause.message : "Chat could not be loaded.");
@@ -806,7 +909,7 @@ function CrewChatPage({ user }: { user: Profile }) {
     };
     void refresh();
     const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refresh(); }, 3_000);
-    return () => { active = false; window.clearInterval(timer); };
+    return () => { active = false; window.clearInterval(timer); if (freshMessageTimer.current !== null) window.clearTimeout(freshMessageTimer.current); };
   }, [conversationType, recipientId]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [messages]);
@@ -821,6 +924,10 @@ function CrewChatPage({ user }: { user: Profile }) {
       const response = await fetch("/api/chat", { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationType, recipientId: conversationType === "direct" ? recipientId : undefined, body }) });
       const result = await response.json() as { message?: ChatMessage; error?: string };
       if (!response.ok || !result.message) throw new Error(result.error || "Message could not be sent.");
+      knownMessageIds.current?.add(result.message.id);
+      setFreshMessageIds((current) => new Set([...current, result.message!.id]));
+      if (freshMessageTimer.current !== null) window.clearTimeout(freshMessageTimer.current);
+      freshMessageTimer.current = window.setTimeout(() => setFreshMessageIds(new Set()), 900);
       setMessages((current) => [...current, result.message!]);
       setDraft("");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Message could not be sent."); }
@@ -839,7 +946,7 @@ function CrewChatPage({ user }: { user: Profile }) {
         {loading ? <div className="crew-chat-empty">Loading messages…</div> : messages.length ? messages.map((message) => {
           const isOwn = message.senderId === user.id;
           const author = isOwn ? user : members.find((member) => member.id === message.senderId);
-          return <article key={message.id} className={`chat-message-row ${isOwn ? "is-own" : ""}`}>
+          return <article key={message.id} className={`chat-message-row ${isOwn ? "is-own" : ""} ${freshMessageIds.has(message.id) ? "is-new-arrival" : ""}`}>
             <ProfileAvatar name={author?.fullName ?? "Team member"} src={author?.avatarUrl} className="chat-avatar" />
             <div className="chat-message-content"><div className="chat-message-meta"><strong>{isOwn ? "You" : author?.fullName ?? "Team member"}</strong><time dateTime={message.createdAt}>{formatStamp(message.createdAt)}</time></div><p>{message.body}</p></div>
           </article>;
@@ -874,7 +981,7 @@ function Dashboard({ data, user, setPage, currentTime }: { data: AppData; user: 
   const personalTaskRate = myServiceTasks.length ? Math.round(myServiceTasks.filter((item) => item.status === "Complete").length / myServiceTasks.length * 100) : 0;
   const personalIncidentCount = data.incidents.filter((item) => item.reportedBy === user.id).length;
   return <>
-    <div className="welcome-line"><div><h2>{manager ? "Good to see you" : `Welcome, ${user.fullName.split(" ")[0]}`}</h2><p>{manager ? "Here’s the operations picture across your upcoming programs." : "Here are your upcoming events and checklist items."}</p></div><span className="today-chip"><Clock3 size={14} /> {new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span></div>
+    <div className="welcome-line"><div><h2>{manager ? "Good to see you" : `Welcome, ${user.fullName.split(" ")[0]}`}</h2><p>{manager ? "Align the crew and keep every upcoming program in flow — all in one command center." : "Your next steps, surfaced — so the team keeps moving in sync."}</p></div><span className="today-chip"><Clock3 size={14} /> {new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span></div>
     <div className="metric-grid">
       <Metric label="Upcoming events" value={events.length} icon={CalendarDays} trend="Scheduled programs" tone="blue" />
       <Metric label={manager ? "Open checklist items" : "My open checklist items"} value={openChecks.length} icon={CheckCircle2} trend="Assigned directly to each person" tone="green" />
