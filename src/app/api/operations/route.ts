@@ -952,7 +952,16 @@ async function runSupabase(action: string, payload: Record<string, unknown>, use
     }
     case "create_checklist_item": {
       if (!hasManagerAccess(user.accessRoles, user.role)) throw new AppError("Only the administrator or director can add checklist items.", 403);
-      throw new AppError("Directly assigning a checklist to a team member needs the connected database update. Local account mode is ready for this.", 503);
+      const values = record(checklistItemCreateSchema, p);
+      const { data, error } = await supabase.rpc("admin_assign_checklist_item", {
+        p_event_id: values.eventId,
+        p_user_id: values.userId,
+        p_label: values.label,
+        p_is_required: values.required,
+        p_program_phase: values.programPhase,
+      });
+      fail(error);
+      return { ok: true, id: data };
     }
     case "create_checklist_template": {
       requireCapability(user.accessRoles ?? user.role, "manage_checklists");
