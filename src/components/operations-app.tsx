@@ -862,7 +862,10 @@ function CrewChatPage({ user }: { user: Profile }) {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const sendingRef = useRef(false);
+  const messagesRef = useRef<HTMLDivElement>(null);
+  const shouldScrollToBottom = useRef(true);
+  const isAtBottom = useRef(true);
   const knownMessageIds = useRef<Set<string> | null>(null);
   const [freshMessageIds, setFreshMessageIds] = useState<Set<string>>(() => new Set());
   const freshMessageTimer = useRef<number | null>(null);
@@ -872,13 +875,19 @@ function CrewChatPage({ user }: { user: Profile }) {
     if (conversationType === "direct" && !recipientId) {
       setMessages([]);
       setLoading(false);
+      shouldScrollToBottom.current = true;
       return;
     }
     let active = true;
     let firstLoad = true;
+    let refreshing = false;
     knownMessageIds.current = null;
     setFreshMessageIds(new Set());
+    setMessages([]);
+    shouldScrollToBottom.current = true;
     const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
       if (firstLoad) setLoading(true);
       const params = new URLSearchParams({ conversationType });
       if (conversationType === "direct") params.set("recipientId", recipientId);
@@ -889,6 +898,8 @@ function CrewChatPage({ user }: { user: Profile }) {
         if (!active) return;
         const nextMessages = body.messages ?? [];
         const previousIds = knownMessageIds.current;
+        const hasNewMessages = previousIds !== null && nextMessages.some((message) => !previousIds.has(message.id));
+        const messagesChanged = previousIds === null || nextMessages.length !== previousIds.size || hasNewMessages;
         if (previousIds) {
           const arrivals = nextMessages.filter((message) => !previousIds.has(message.id)).map((message) => message.id);
           if (arrivals.length) {
@@ -899,11 +910,16 @@ function CrewChatPage({ user }: { user: Profile }) {
         }
         knownMessageIds.current = new Set(nextMessages.map((message) => message.id));
         setMembers(body.members ?? []);
-        setMessages(nextMessages);
+        if (messagesChanged) {
+          const shouldFollow = previousIds === null || isAtBottom.current;
+          if (shouldFollow) shouldScrollToBottom.current = true;
+          setMessages(nextMessages);
+        }
         setError("");
       } catch (cause) {
         if (active) setError(cause instanceof Error ? cause.message : "Chat could not be loaded.");
       } finally {
+        refreshing = false;
         if (firstLoad) { firstLoad = false; if (active) setLoading(false); }
       }
     };
@@ -912,12 +928,24 @@ function CrewChatPage({ user }: { user: Profile }) {
     return () => { active = false; window.clearInterval(timer); if (freshMessageTimer.current !== null) window.clearTimeout(freshMessageTimer.current); };
   }, [conversationType, recipientId]);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [messages]);
+  useEffect(() => {
+    if (!shouldScrollToBottom.current) return;
+    shouldScrollToBottom.current = false;
+    const container = messagesRef.current;
+    if (container) requestAnimationFrame(() => container.scrollTo({ top: container.scrollHeight, behavior: "smooth" }));
+  }, [messages]);
+
+  const updateScrollPosition = () => {
+    const container = messagesRef.current;
+    if (!container) return;
+    isAtBottom.current = container.scrollHeight - container.clientHeight - container.scrollTop < 72;
+  };
 
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const body = draft.trim();
-    if (!body || sending || (conversationType === "direct" && !recipientId)) return;
+    if (!body || sendingRef.current || (conversationType === "direct" && !recipientId)) return;
+    sendingRef.current = true;
     setSending(true);
     setError("");
     try {
@@ -928,21 +956,22 @@ function CrewChatPage({ user }: { user: Profile }) {
       setFreshMessageIds((current) => new Set([...current, result.message!.id]));
       if (freshMessageTimer.current !== null) window.clearTimeout(freshMessageTimer.current);
       freshMessageTimer.current = window.setTimeout(() => setFreshMessageIds(new Set()), 900);
-      setMessages((current) => [...current, result.message!]);
+      shouldScrollToBottom.current = true;
+      isAtBottom.current = true;
+      setMessages((current) => current.some((message) => message.id === result.message!.id) ? current : [...current, result.message!]);
       setDraft("");
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Message could not be sent."); }
-    finally { setSending(false); }
+    finally { sendingRef.current = false; setSending(false); }
   };
 
   return <>
-    <PageIntro title="Crew chat" detail="Talk with the whole crew in All chat, or choose a teammate for a private conversation." />
     <section className="panel crew-chat-panel">
       <div className="crew-chat-toolbar">
         <button type="button" className={`crew-chat-room-button ${conversationType === "all" ? "is-active" : ""}`} onClick={() => setConversationType("all")}><Users size={16} /><span><strong>All chat</strong><small>Everyone on the crew</small></span></button>
         <label className="form-field crew-chat-recipient"><span>Choose someone to talk to</span><select value={recipientId} onChange={(event) => { const selectedId = event.currentTarget.value; setRecipientId(selectedId); setConversationType(selectedId ? "direct" : "all"); }}><option value="">Select a team member…</option>{members.map((member) => <option key={member.id} value={member.id}>{member.fullName} · {member.jobTitle || member.role}</option>)}</select></label>
       </div>
       <div className="crew-chat-heading"><div>{conversationType === "all" ? <><span className="eyebrow">TEAM ROOM</span><h3>All chat</h3></> : <><ProfileAvatar name={recipient?.fullName ?? "Team member"} src={recipient?.avatarUrl} className="chat-heading-avatar" /><span><h3>{recipient?.fullName ?? "Direct chat"}</h3><small>{recipient?.jobTitle || recipient?.role || "Team member"}</small></span></>}</div><span className="chat-live-indicator"><i />Updates automatically</span></div>
-      <div className="crew-chat-messages" aria-live="polite" aria-label={conversationType === "all" ? "All crew messages" : `Messages with ${recipient?.fullName ?? "team member"}`}>
+      <div ref={messagesRef} onScroll={updateScrollPosition} className="crew-chat-messages" aria-live="polite" aria-label={conversationType === "all" ? "All crew messages" : `Messages with ${recipient?.fullName ?? "team member"}`}>
         {loading ? <div className="crew-chat-empty">Loading messages…</div> : messages.length ? messages.map((message) => {
           const isOwn = message.senderId === user.id;
           const author = isOwn ? user : members.find((member) => member.id === message.senderId);
@@ -951,7 +980,6 @@ function CrewChatPage({ user }: { user: Profile }) {
             <div className="chat-message-content"><div className="chat-message-meta"><strong>{isOwn ? "You" : author?.fullName ?? "Team member"}</strong><time dateTime={message.createdAt}>{formatStamp(message.createdAt)}</time></div><p>{message.body}</p></div>
           </article>;
         }) : <div className="crew-chat-empty"><MessageCircle size={22} /><strong>{conversationType === "all" ? "Start the crew conversation" : "No messages yet"}<small>Send a message to get the conversation started.</small></strong></div>}
-        <div ref={bottomRef} />
       </div>
       {error && <p className="crew-chat-error" role="alert">{error}</p>}
       <form className="crew-chat-composer" onSubmit={sendMessage}><textarea aria-label="Write a message" maxLength={2000} placeholder={conversationType === "direct" && !recipientId ? "Choose a team member first" : "Write a message…"} value={draft} onChange={(event) => setDraft(event.currentTarget.value)} disabled={conversationType === "direct" && !recipientId} /><button className="button button-primary" type="submit" disabled={sending || !draft.trim() || (conversationType === "direct" && !recipientId)}><Send size={15} />{sending ? "Sending…" : "Send"}</button></form>
