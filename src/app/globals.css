@@ -45,7 +45,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .nav-link.active svg { color: #e7c173; }
 .nav-count { min-width: 20px; padding: 3px 5px; border-radius: 10px; color: #ffe7bd; background: rgba(210, 148, 58, .22); text-align: center; font-size: 10px; }
 .sidebar-bottom { margin-top: auto; }
-.connection { display: flex; align-items: center; gap: 8px; padding: 12px 10px 14px; border-bottom: 1px solid rgba(238,242,247,.09); color: #9ba8b9; font-size: 10px; }
+.connection { display: flex; align-items: center; gap: 8px; padding: 0; border-bottom: 1px solid rgba(238,242,247,.09); color: #9ba8b9; font-size: 10px; }
 .connection-dot { width: 7px; height: 7px; border-radius: 50%; background: #39bd93; box-shadow: 0 0 0 3px rgba(57, 189, 147, .11); }
 .demo-connection .connection-dot { background: #e8ad4f; box-shadow: 0 0 0 3px rgba(232, 173, 79, .12); }
 .sidebar-user { display: flex; align-items: center; gap: 9px; padding: 13px 5px 3px; }
@@ -1548,11 +1548,11 @@ html[data-theme="dark"] .alarm-countdown-widget-copy em { color: hsl(var(--alarm
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  padding: 18px clamp(18px, 2.8vw, 42px) 20px;
+  padding: 0;
 }
-.main-content:has(.crew-chat-panel) > .page-heading { flex: 0 0 auto; align-items: center; margin-bottom: 13px; }
-.main-content:has(.crew-chat-panel) > .page-heading .today-label { align-self: center; }
-.main-content:has(.crew-chat-panel) .crew-chat-panel { min-height: 0; flex: 1 1 auto; border-radius: 14px; }
+.main-content:has(.crew-chat-panel) > .page-heading { display: none; }
+
+.main-content:has(.crew-chat-panel) .crew-chat-panel { width: 100%; min-height: 0; flex: 1 1 auto; border-right: 0; border-left: 0; border-radius: 0; }
 .crew-chat-toolbar { gap: 15px; padding: 15px 20px; }
 .crew-chat-room-button { min-width: 205px; padding: 10px 12px; }
 .crew-chat-room-button strong { font-size: 12px; }
@@ -1600,10 +1600,10 @@ html[data-theme="dark"] .crew-chat-composer textarea { border-color: rgba(199, 1
   .main-content:has(.crew-chat-panel) {
     height: calc(100vh - 56px);
     height: calc(100dvh - 56px);
-    padding: 12px 10px 14px;
+    padding: 0;
   }
-  .main-content:has(.crew-chat-panel) > .page-heading { margin-bottom: 10px; }
-  .main-content:has(.crew-chat-panel) > .page-heading .today-label { display: none; }
+  
+  
   .crew-chat-toolbar { align-items: flex-end; flex-direction: row; gap: 8px; padding: 10px; }
   .crew-chat-room-button { width: 38%; min-width: 118px; padding: 8px; }
   .crew-chat-room-button small { display: none; }
