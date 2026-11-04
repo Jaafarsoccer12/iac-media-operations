@@ -10,8 +10,7 @@ import { syncNewEquipmentToSheet } from "@/lib/google-sheets-equipment";
 import { hasChecklistTemplateNameConflict } from "@/lib/checklist-templates.mjs";
 import { CHECKLIST_PROGRAM_PHASES, normalizeChecklistProgramPhase, orderChecklistProgramPhases } from "@/lib/checklist-phases.mjs";
 
-const actionSchema = z.object({ action: z.string(), payload: z.record(z.string(), z.unknown()).default({}) });
-const optionalEventTimeSchema = z.string().regex(/^(?:\d{2}:\d{2})?$/).default("");
+const actionSchema = z.object({ action: z.string(), payload: z.record(z.string(), z.unknown()).default({}) });const optionalEventTimeSchema = z.string().regex(/^(?:\d{2}:\d{2}(?::\d{2})?)?$/).transform((value) => value ? value.slice(0, 5) : "").default("");
 const eventSchema = z.object({
   title: z.string().trim().min(3).max(120), category: z.string().trim().min(1).max(80), date: z.iso.date(),
   startTime: optionalEventTimeSchema, endTime: optionalEventTimeSchema,
