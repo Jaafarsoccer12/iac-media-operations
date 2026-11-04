@@ -79,6 +79,12 @@ function displayDate(value: string) { return new Date(`${value}T12:00:00`).toLoc
 function localCalendarDate() { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`; }
 function displayTime(value: string) { const normalized = /^\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(value) ? value.slice(0, 5) : ""; if (!normalized) return "To be confirmed"; const [hour, minute] = normalized.split(":").map(Number); return new Date(2000, 0, 1, hour, minute).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }); }
 function eventTimeRange(event: MediaEvent) { return event.startTime && event.endTime ? `${displayTime(event.startTime)}–${displayTime(event.endTime)}` : "Time to be confirmed"; }
+function normalizeEventTimeInput(value: unknown) {
+  if (typeof value !== "string") return value;
+  const match = /^(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(value.trim());
+  return match ? match[1] : value;
+}
+
 function phaseOptions(data: AppData) { return orderChecklistProgramPhases(data.categories?.checklists); }
 function ProgramPhaseButtons({ data, event, onSelect }: { data: AppData; event: MediaEvent; onSelect: (phase: string) => void }) {
   const phases = phaseOptions(data);
@@ -552,7 +558,10 @@ export function OperationsApp() {
       values.accessRoles = formData.getAll("accessRoles");
       values.jobTitle = formData.getAll("productionRoles").filter((value): value is string => typeof value === "string" && productionPositions.includes(value)).join(" · ");
     }
-    if (action === "create_event" || action === "update_event") values.assignedUserIds = formData.getAll("assignedUserIds");
+        if (action === "create_event" || action === "update_event") {
+      values.assignedUserIds = formData.getAll("assignedUserIds");
+      for (const key of ["startTime", "endTime", "setupTime"]) values[key] = normalizeEventTimeInput(values[key]);
+    }
     if (action === "create_checklist_template" || action === "update_checklist_template" || action === "quick_assign_checklist") {
       try { values.tasks = JSON.parse(String(formData.get("tasks") ?? "[]")); }
       catch { setNotice({ text: "Check the task list and try again.", error: true }); return; }
