@@ -38,6 +38,7 @@ Demo mode is rejected by the app in production. It is intended for a trusted loc
    - `supabase/migrations/202610250003_rls_policies.sql`
    - `supabase/migrations/202610250004_person_equipment_loans.sql`
    - `supabase/migrations/202610260005_team_account_management.sql`
+   - Apply later migration files in timestamp order as well; direct checklist-item assignment uses `supabase/migrations/202611040030_direct_checklist_item_assignment.sql`.
 3. Copy the project URL and publishable/anon key into `.env.local`:
 
    ```env
