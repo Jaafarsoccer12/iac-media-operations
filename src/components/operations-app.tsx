@@ -1,16 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ChangeEvent, type CSSProperties, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import NextImage from "next/image";
 import {
   Activity, AlarmClock, AlertTriangle, ArrowDownToLine, ArrowRight, Bell, BookOpen, CalendarDays, Check,
-  CheckCircle2, ChevronDown, ClipboardCheck, Clock3, FileText, HardDrive, Headphones, LayoutDashboard,
-  LogOut, Menu, MessageCircle, Moon, Pencil, Plus, Radio, Search, Send, Settings2, ShieldCheck, Sparkles, Sun, Trash2, Users, Video, Wrench, X,
+  CheckCircle2, ChevronDown, ClipboardCheck, Clock3, FileText, HardDrive, Headphones, ImagePlus, LayoutDashboard,
+  LogOut, Menu, MessageCircle, Moon, Paperclip, Pencil, Plus, Radio, Reply, Search, Send, Settings2, ShieldCheck, Sparkles, Sun, Trash2, Users, Video, Wrench, X,
 } from "lucide-react";
 import { can, eventReadiness } from "@/lib/policy.mjs";
 import { CHECKLIST_PROGRAM_PHASES, normalizeChecklistProgramPhase, orderChecklistProgramPhases } from "@/lib/checklist-phases.mjs";
-import type { AppData, AppRole, ChatMessage, ChecklistTemplateTask, EquipmentTemplateItem, MediaEvent, Profile, SessionContext } from "@/lib/types";
+import type { AppData, AppRole, ChatAttachment, ChatMessage, ChecklistTemplateTask, EquipmentTemplateItem, MediaEvent, Profile, SessionContext, SopContentBlock } from "@/lib/types";
 import { hasAccessRole, hasManagerAccess } from "@/lib/roles";
+import { fileAsDataUrl, formatFileSize, prepareChatFile } from "@/lib/browser-media";
 
 type PageKey = "dashboard" | "time" | "chat" | "events" | "equipment" | "checklists" | "sops" | "incidents" | "reports" | "notifications" | "settings";
 type AppPayload = { context: SessionContext; data: AppData };
@@ -259,7 +260,10 @@ export function OperationsApp() {
   const [teamRefresh, setTeamRefresh] = useState(0);
   const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
   const [notificationAlert, setNotificationAlert] = useState<{ id: string; title: string; detail: string; alarmId?: string } | null>(null);
-  const [chatUnreadCount, setChatUnreadCount] = useState(0);
+  const [alarmWidgetPosition, setAlarmWidgetPosition] = useState<{ left: number; top: number } | null>(null);
+  const alarmDrag = useRef<{ pointerId: number; startX: number; startY: number; left: number; top: number; moved: boolean } | null>(null);
+  const alarmClickSuppressed = useRef(false);
+  const [chatUnread, setChatUnread] = useState<{ userId: string | null; count: number }>({ userId: null, count: 0 });
   const [animatedNavItems, setAnimatedNavItems] = useState<PageKey[]>([]);
   const [loginError, setLoginError] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
@@ -271,6 +275,73 @@ export function OperationsApp() {
   const priorNavCounts = useRef<{ userId: string; chat: number; checklists: number; notifications: number } | null>(null);
   const navAnimationTimer = useRef<number | null>(null);
   const darkMode = useSyncExternalStore(subscribeToTheme, getStoredDarkMode, () => false);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      try {
+        const saved = window.localStorage.getItem("iac-alarm-widget-position");
+        if (!saved) return;
+        const position = JSON.parse(saved) as { left?: number; top?: number };
+        if (Number.isFinite(position.left) && Number.isFinite(position.top)) setAlarmWidgetPosition({ left: Math.max(8, position.left!), top: Math.max(8, position.top!) });
+      } catch { /* Keep the default corner position when browser storage is unavailable. */ }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+  useEffect(() => {
+    if (!alarmWidgetPosition) return;
+    const constrain = () => {
+      const widget = document.querySelector<HTMLButtonElement>(".alarm-countdown-widget");
+      if (!widget) return;
+      const rect = widget.getBoundingClientRect();
+      const bottomClearance = page === "chat" ? 116 : 8;
+      const position = {
+        left: Math.min(Math.max(8, alarmWidgetPosition.left), Math.max(8, window.innerWidth - rect.width - 8)),
+        top: Math.min(Math.max(8, alarmWidgetPosition.top), Math.max(8, window.innerHeight - rect.height - bottomClearance)),
+      };
+      if (position.left !== alarmWidgetPosition.left || position.top !== alarmWidgetPosition.top) {
+        setAlarmWidgetPosition(position);
+        try { window.localStorage.setItem("iac-alarm-widget-position", JSON.stringify(position)); } catch { /* Position remains constrained for this session. */ }
+      }
+    };
+    const frame = window.requestAnimationFrame(constrain);
+    window.addEventListener("resize", constrain);
+    return () => { window.cancelAnimationFrame(frame); window.removeEventListener("resize", constrain); };
+  }, [alarmWidgetPosition, payload?.data.timeAlarms, page]);
+  const startAlarmWidgetDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    alarmDrag.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, left: rect.left, top: rect.top, moved: false };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const moveAlarmWidget = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = alarmDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.startX; const dy = event.clientY - drag.startY;
+    if (Math.abs(dx) + Math.abs(dy) > 5) drag.moved = true;
+    if (!drag.moved) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const left = Math.min(Math.max(8, drag.left + dx), Math.max(8, window.innerWidth - rect.width - 8));
+    const bottomClearance = page === "chat" ? 116 : 8;
+    const top = Math.min(Math.max(8, drag.top + dy), Math.max(8, window.innerHeight - rect.height - bottomClearance));
+    setAlarmWidgetPosition({ left, top });
+  };
+  const endAlarmWidgetDrag = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = alarmDrag.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    alarmDrag.current = null;
+    if (drag.moved) {
+      alarmClickSuppressed.current = true;
+      const rect = event.currentTarget.getBoundingClientRect();
+      const dx = event.clientX - drag.startX; const dy = event.clientY - drag.startY;
+      const position = {
+        left: Math.min(Math.max(8, drag.left + dx), Math.max(8, window.innerWidth - rect.width - 8)),
+        top: Math.min(Math.max(8, drag.top + dy), Math.max(8, window.innerHeight - rect.height - (page === "chat" ? 116 : 8))),
+      };
+      setAlarmWidgetPosition(position);
+      try { window.localStorage.setItem("iac-alarm-widget-position", JSON.stringify(position)); } catch { /* Position remains movable for this session. */ }
+      window.setTimeout(() => { alarmClickSuppressed.current = false; }, 0);
+    }
+  };
 
   useEffect(() => {
     const updateClock = () => setAlarmDisplayNow(Date.now());
@@ -379,7 +450,7 @@ export function OperationsApp() {
   }, [darkMode]);
   const activeUserId = payload?.context.user.id;
   useEffect(() => {
-    if (!activeUserId) { setChatUnreadCount(0); return; }
+    if (!activeUserId) return;
     const storageKey = `iac-chat-last-seen:${activeUserId}`;
     let lastSeen = 0;
     try {
@@ -391,7 +462,7 @@ export function OperationsApp() {
     const markChatSeen = () => {
       lastSeen = Date.now();
       try { window.localStorage.setItem(storageKey, String(lastSeen)); } catch { /* Keep the in-memory timestamp for this session. */ }
-      setChatUnreadCount(0);
+      setChatUnread({ userId: activeUserId, count: 0 });
     };
     if (page === "chat") markChatSeen();
     let checkingMessages = false;
@@ -403,7 +474,7 @@ export function OperationsApp() {
         const response = await fetch(`/api/chat?${params.toString()}`, { cache: "no-store" });
         if (!response.ok) return;
         const body = await response.json() as { count?: number };
-        setChatUnreadCount(Math.max(0, Number(body.count) || 0));
+        setChatUnread({ userId: activeUserId, count: Math.max(0, Number(body.count) || 0) });
       } catch { /* The next poll will retry when the server is available. */ }
       finally { checkingMessages = false; }
     };
@@ -468,7 +539,7 @@ export function OperationsApp() {
     remindForPendingAlarms();
     const timer = window.setInterval(remindForPendingAlarms, 1_000);
     return () => window.clearInterval(timer);
-  }, [activeUserId, payload?.data.timeAlarms, ringNotification]);
+  }, [activeUserId, payload, ringNotification]);
 
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
@@ -496,11 +567,6 @@ export function OperationsApp() {
     const timer = window.setTimeout(() => setNotificationAlert(null), 6500);
     return () => window.clearTimeout(timer);
   }, [notificationAlert]);
-  useEffect(() => {
-    if (!notificationAlert?.alarmId) return;
-    const alarm = payload?.data.timeAlarms.find((entry) => entry.id === notificationAlert.alarmId);
-    if (alarm?.completedAt || alarm?.cancelledAt) setNotificationAlert(null);
-  }, [notificationAlert?.alarmId, payload?.data.timeAlarms]);
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
@@ -554,9 +620,9 @@ export function OperationsApp() {
     const form = event.currentTarget;
     const formData = new FormData(form);
     const values = Object.fromEntries(formData.entries()) as Record<string, unknown>;
-    if (action === "team_invite" || action === "team_update_member") {
+    if (action === "team_invite" || action === "team_update_member" || action === "team_update_roles") {
       values.accessRoles = formData.getAll("accessRoles");
-      values.jobTitle = formData.getAll("productionRoles").filter((value): value is string => typeof value === "string" && productionPositions.includes(value)).join(" · ");
+      if (action !== "team_update_roles") values.jobTitle = formData.getAll("productionRoles").filter((value): value is string => typeof value === "string" && productionPositions.includes(value)).join(" · ");
     }
         if (action === "create_event" || action === "update_event") {
       values.assignedUserIds = formData.getAll("assignedUserIds");
@@ -571,7 +637,12 @@ export function OperationsApp() {
       catch { setNotice({ text: "Check the equipment list and try again.", error: true }); return; }
     }
     if (["report_incident", "update_incident", "complete_own_incident"].includes(action)) values.photos = formData.getAll("photos").filter((value): value is string => typeof value === "string" && value.startsWith("data:image/"));
-    if (action === "create_sop" || action === "update_sop_audience") values.assignedUserIds = formData.getAll("assignedUserIds");
+    if (action === "create_sop" || action === "update_sop_audience" || action === "save_rich_sop") values.assignedUserIds = formData.getAll("assignedUserIds");
+    if (action === "save_rich_sop") {
+      try { values.content = JSON.parse(String(formData.get("richContent") ?? "[]")); }
+      catch { setNotice({ text: "Review the procedure content and try again.", error: true }); return; }
+      if (modal?.type === "edit-sop") values.sopId = modal.id;
+    }
     if (action === "create_event") values.timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     if (action === "update_event") values.timeZone = data.events.find((item) => item.id === String(values.eventId))?.timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
     if ((action === "create_event" || action === "update_event") && values.leadId === "none") values.leadId = "";
@@ -622,23 +693,26 @@ export function OperationsApp() {
 
   const signOut = async () => {
     await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "logout" }) });
-    seenNotificationIds.current = null; notificationUserId.current = null; setNotificationAlert(null); setPage("dashboard"); setPayload(null); await load();
+    seenNotificationIds.current = null; notificationUserId.current = null; setChatUnread({ userId: null, count: 0 }); setNotificationAlert(null); setPage("dashboard"); setPayload(null); await load();
   };
 
   const context = payload?.context;
   const data = payload?.data ?? emptyData;
+  const visibleNotificationAlert = notificationAlert?.alarmId && payload && !data.timeAlarms.some((entry) => entry.id === notificationAlert.alarmId && !entry.completedAt && !entry.cancelledAt)
+    ? null
+    : notificationAlert;
   const allowedNav = useMemo(() => navItems.filter((item) => !item.needs || context?.capabilities.includes(item.needs)), [context]);
   const navCounts = useMemo(() => {
     const user = context?.user;
-    if (!user) return { chat: chatUnreadCount, checklists: 0, notifications: 0 };
+    if (!user) return { chat: 0, checklists: 0, notifications: 0 };
     const managerView = hasManagerAccess(user.accessRoles, user.role);
     const cutoff = currentTime - 24 * 60 * 60 * 1000;
     return {
-      chat: chatUnreadCount,
+      chat: chatUnread.userId === user.id ? chatUnread.count : 0,
       checklists: data.checklistItems.filter((item) => (managerView || item.userId === user.id) && (!managerView || !item.clearedFromChecklist) && item.status !== "Complete").length,
       notifications: data.notifications.filter((item) => item.userId === user.id && !item.read && (!managerView || Date.parse(item.date) >= cutoff)).length,
     };
-  }, [context, data, chatUnreadCount, currentTime]);
+  }, [context, data, chatUnread, currentTime]);
   useEffect(() => {
     const userId = context?.user.id;
     if (!userId) { priorNavCounts.current = null; return; }
@@ -650,9 +724,18 @@ export function OperationsApp() {
     if (navCounts.checklists > previous.checklists) arrived.push("checklists");
     if (navCounts.notifications > previous.notifications) arrived.push("notifications");
     if (!arrived.length) return;
-    setAnimatedNavItems(arrived);
-    if (navAnimationTimer.current !== null) window.clearTimeout(navAnimationTimer.current);
-    navAnimationTimer.current = window.setTimeout(() => setAnimatedNavItems([]), 1_250);
+    const frame = window.requestAnimationFrame(() => {
+      setAnimatedNavItems(arrived);
+      if (navAnimationTimer.current !== null) window.clearTimeout(navAnimationTimer.current);
+      navAnimationTimer.current = window.setTimeout(() => setAnimatedNavItems([]), 1_250);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      if (navAnimationTimer.current !== null) {
+        window.clearTimeout(navAnimationTimer.current);
+        navAnimationTimer.current = null;
+      }
+    };
   }, [context?.user.id, navCounts]);
 
   if (loading && !authSettings) return <div className="boot-screen"><BrandMark large /><span className="boot-pulse" />Preparing media operations</div>;
@@ -675,11 +758,11 @@ export function OperationsApp() {
     switch (page) {
       case "dashboard": return <Dashboard data={data} user={user} setPage={setPage} currentTime={currentTime} />;
       case "time": return <TimePage data={data} user={user} run={doAction} />;
-      case "chat": return <CrewChatPage user={user} />;
+      case "chat": return <CrewChatPage user={user} mode={context.mode} />;
       case "events": return <EventsPage data={data} user={user} searchMatch={searchMatch} openModal={setModal} run={doAction} />;
       case "equipment": return <EquipmentPage data={data} user={user} searchMatch={searchMatch} openModal={setModal} run={doAction} />;
       case "checklists": return <ChecklistsPage data={data} user={user} openModal={setModal} run={doAction} />;
-      case "sops": return <SopPage data={data} user={user} searchMatch={searchMatch} openModal={setModal} />;
+      case "sops": return <SopPage data={data} user={user} searchMatch={searchMatch} openModal={setModal} run={doAction} />;
       case "incidents": return <IncidentsPage data={data} user={user} openModal={setModal} run={doAction} />;
       case "reports": return <ReportsPage data={data} user={user} run={doAction} />;
       case "notifications": return <NotificationsPage data={data} user={user} run={doAction} currentTime={currentTime} />;
@@ -704,19 +787,19 @@ export function OperationsApp() {
     </aside>
     {mobileNav && <button className="nav-scrim" aria-label="Close navigation" onClick={() => setMobileNav(false)} />}
     <div className="main-column">
-      <header className="topbar"><div className="topbar-left"><button className="icon-button menu-toggle" aria-label="Open menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><span className="breadcrumb">IAC <span>/</span> {pageTitles[page]}</span></div><div className="topbar-right"><label className="global-search"><Search size={16} /><input aria-label="Search visible records" placeholder="Search visible records" value={search} onChange={(event) => setSearch(event.target.value)} /><kbd>⌘ K</kbd></label><ThemeToggle darkMode={darkMode} onToggle={() => setDarkMode((value) => !value)} /><button className={`icon-button notification-button ${notificationAlert ? "is-alerting" : ""}`} onClick={() => setPage("notifications")} title="Notifications" aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ""}`}><Bell size={18} />{unreadCount > 0 && <b className="top-notification-count">{unreadCount > 99 ? "99+" : unreadCount}</b>}</button><button type="button" className="top-profile-button" title="My profile" aria-label="Open my profile" onClick={() => setModal({ type: "profile" })}><ProfileAvatar name={user.fullName} src={user.avatarUrl} className="top-avatar" /></button></div></header>
+      <header className="topbar"><div className="topbar-left"><button className="icon-button menu-toggle" aria-label="Open menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><span className="breadcrumb">IAC <span>/</span> {pageTitles[page]}</span></div><div className="topbar-right"><label className="global-search"><Search size={16} /><input aria-label="Search visible records" placeholder="Search visible records" value={search} onChange={(event) => setSearch(event.target.value)} /><kbd>⌘ K</kbd></label><ThemeToggle darkMode={darkMode} onToggle={() => setDarkMode((value) => !value)} /><button className={`icon-button notification-button ${visibleNotificationAlert ? "is-alerting" : ""}`} onClick={() => setPage("notifications")} title="Notifications" aria-label={`Notifications${unreadCount ? `, ${unreadCount} unread` : ""}`}><Bell size={18} />{unreadCount > 0 && <b className="top-notification-count">{unreadCount > 99 ? "99+" : unreadCount}</b>}</button><button type="button" className="top-profile-button" title="My profile" aria-label="Open my profile" onClick={() => setModal({ type: "profile" })}><ProfileAvatar name={user.fullName} src={user.avatarUrl} className="top-avatar" /></button></div></header>
       <main key={page} className="main-content page-transition"><div className="page-heading"><div><div className="hero-badge page-heading-badge"><Sparkles size={12} /> OPERATIONS HUB — IN SYNC</div><div className="eyebrow">IMAM ALI CENTER · MEDIA TEAM</div><h1>{pageTitles[page]}</h1></div><div className="page-heading-meta"><span className="today-label">{new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}</span>{page === "events" && can(user.accessRoles ?? user.role, "manage_events") && <button className="button button-primary" onClick={() => setModal({ type: "create-event" })}><Plus size={16} />Create event</button>}{page === "checklists" && hasManagerAccess(user.accessRoles, user.role) && <button className="button button-primary" onClick={() => setModal({ type: "create-checklist-item" })}><Plus size={16} />Add checklist item</button>}{page === "equipment" && can(user.accessRoles ?? user.role, "manage_equipment") && <button className="button button-primary" onClick={() => setModal({ type: "create-asset" })}><Plus size={16} />Add asset</button>}{page === "incidents" && can(user.accessRoles ?? user.role, "report_incidents") && <button className="button button-primary" onClick={() => setModal({ type: "report-incident" })}><AlertTriangle size={15} />Report issue</button>}{page === "sops" && can(user.accessRoles ?? user.role, "manage_sops") && <button className="button button-primary" onClick={() => setModal({ type: "create-sop" })}><Plus size={16} />New SOP</button>}</div></div>
 
         {loading && <div className="refresh-line"><span />Refreshing records…</div>}
         {search.trim() ? <GlobalSearchResults data={data} query={search.trim()} setPage={setPage} clear={() => setSearch("")} /> : renderPage()}
       </main>
     </div>
-    {nextPersonalAlarm && alarmDisplayNow > 0 && <button type="button" className={`alarm-countdown-widget ${personalAlarmOverdue ? "is-overdue" : ""} ${personalAlarmNearDue ? "is-near-due" : ""} ${personalAlarmCritical ? "is-critical" : ""}`} style={{ "--alarm-hue": alarmCountdownHue(personalAlarmRemainingMs) } as CSSProperties} onClick={() => setPage("time")} aria-label={`${personalAlarmOverdue ? "Overdue alarm" : "Alarm countdown"}: ${nextPersonalAlarm.description}`}>
+    {nextPersonalAlarm && alarmDisplayNow > 0 && <button type="button" className={`alarm-countdown-widget ${page === "chat" ? "is-over-chat" : ""} ${personalAlarmOverdue ? "is-overdue" : ""} ${personalAlarmNearDue ? "is-near-due" : ""} ${personalAlarmCritical ? "is-critical" : ""}`} style={{ "--alarm-hue": alarmCountdownHue(personalAlarmRemainingMs), ...(alarmWidgetPosition ? { left: alarmWidgetPosition.left, top: alarmWidgetPosition.top, right: "auto", bottom: "auto" } : {}) } as CSSProperties} onPointerDown={startAlarmWidgetDrag} onPointerMove={moveAlarmWidget} onPointerUp={endAlarmWidgetDrag} onPointerCancel={endAlarmWidgetDrag} onClick={() => { if (alarmClickSuppressed.current) return; setPage("time"); }} aria-label={`${personalAlarmOverdue ? "Overdue alarm" : "Alarm countdown"}: ${nextPersonalAlarm.description}. Drag to move.`}>
       <span className="alarm-countdown-widget-icon"><AlarmClock size={19} /></span>
       <span className="alarm-countdown-widget-copy"><small>{personalAlarmOverdue ? "ALARM OVERDUE" : "TIME REMAINING"}</small><strong>{nextPersonalAlarm.description}</strong><em style={{ "--alarm-hue": alarmCountdownHue(personalAlarmRemainingMs) } as CSSProperties}>{personalAlarmOverdue ? "Task needs completion" : formatAlarmCountdown(nextPersonalAlarm.fireAt, alarmDisplayNow)}</em></span>
       <ArrowRight size={16} />
     </button>}
-    {notificationAlert?.alarmId ? <div key={notificationAlert.id} className="notification-arrival alarm-notification-arrival" role="status"><span className="notification-arrival-icon"><AlarmClock size={25} /></span><span><strong>Alarm is due</strong><small>{notificationAlert.detail} · Complete the task to stop reminders.</small></span><button className="button button-primary alarm-arrival-complete" type="button" onClick={() => { setNotificationAlert(null); void doAction("complete_time_alarm", { alarmId: notificationAlert.alarmId }); }}>Task completed</button></div> : notificationAlert && <button type="button" key={notificationAlert.id} className="notification-arrival" role="status" onClick={() => { setPage("notifications"); setNotificationAlert(null); }}><span className="notification-arrival-icon"><Bell size={24} /></span><span><strong>New notification</strong><small>{notificationAlert.title} · {notificationAlert.detail}</small></span><span className="notification-arrival-action">View</span></button>}
+    {visibleNotificationAlert?.alarmId ? <div key={visibleNotificationAlert.id} className="notification-arrival alarm-notification-arrival" role="status"><span className="notification-arrival-icon"><AlarmClock size={25} /></span><span><strong>Alarm is due</strong><small>{visibleNotificationAlert.detail} · Complete the task to stop reminders.</small></span><button className="button button-primary alarm-arrival-complete" type="button" onClick={() => { setNotificationAlert(null); void doAction("complete_time_alarm", { alarmId: visibleNotificationAlert.alarmId }); }}>Task completed</button></div> : visibleNotificationAlert && <button type="button" key={visibleNotificationAlert.id} className="notification-arrival" role="status" onClick={() => { setPage("notifications"); setNotificationAlert(null); }}><span className="notification-arrival-icon"><Bell size={24} /></span><span><strong>New notification</strong><small>{visibleNotificationAlert.title} · {visibleNotificationAlert.detail}</small></span><span className="notification-arrival-action">View</span></button>}
     {modal && <Modal state={modal} data={data} user={user} context={context} onClose={() => setModal(null)} openModal={setModal} onSubmit={handleForm} run={doAction} onDeleteAsset={deleteEquipment} />}
     {notice && <div role="status" className={`toast ${notice.error ? "toast-error" : ""}`}><span>{notice.error ? <AlertTriangle size={17} /> : <CheckCircle2 size={17} />}</span>{notice.text}<button className="icon-button" onClick={() => setNotice(null)} aria-label="Dismiss"><X size={15} /></button></div>}
   </div>;
@@ -767,6 +850,7 @@ function TimePage({ data, user, run }: { data: AppData; user: Profile; run: (act
   const [phoneAlertPermission, setPhoneAlertPermission] = useState<NotificationPermission | "unsupported">("unsupported");
   const clockOffset = useRef(0);
   const manager = hasManagerAccess(user.accessRoles, user.role);
+  const administrator = hasAccessRole(user.accessRoles, user.role, "Administrator");
   const center = clockMs ? centerTimeParts(clockMs) : null;
   const alarms = [...(data.timeAlarms ?? [])].sort((a, b) => Number(Boolean(a.cancelledAt || a.triggeredAt)) - Number(Boolean(b.cancelledAt || b.triggeredAt)) || a.fireAt.localeCompare(b.fireAt));
   const activePeople = data.profiles.filter((profile) => profile.active !== false).sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -797,7 +881,10 @@ function TimePage({ data, user, run }: { data: AppData; user: Profile; run: (act
   }, []);
 
   useEffect(() => {
-    setPhoneAlertPermission("Notification" in window ? window.Notification.permission : "unsupported");
+    const frame = window.requestAnimationFrame(() => {
+      setPhoneAlertPermission("Notification" in window ? window.Notification.permission : "unsupported");
+    });
+    return () => window.cancelAnimationFrame(frame);
   }, []);
 
   const enablePhoneAlerts = async () => {
@@ -816,7 +903,7 @@ function TimePage({ data, user, run }: { data: AppData; user: Profile; run: (act
   };
 
   return <>
-    <PageIntro title="Shared timecode" detail="The same center time is shown on every phone and computer, synchronized with the app server." />
+    <PageIntro title="Shared timecode" detail="The same center time is shown on every phone and computer, synchronized with the app server.">{administrator && alarms.some((alarm) => !alarm.cancelledAt && !alarm.completedAt) && <button className="button button-small button-quiet danger-text" type="button" onClick={() => { if (window.confirm("Clear every active team alarm and stop its reminders? Completed alarms and their history will remain unchanged.")) void run("admin_clear_active_time_alarms"); }}><Trash2 size={14} />Clear all active alarms</button>}</PageIntro>
     <section className="time-clock-panel" aria-label="Shared center time">
       <div className="time-clock-topline"><span className="time-clock-indicator" /><span>IMAM ALI CENTER · EASTERN TIME</span><span className={`time-sync-state ${clockSynced ? "is-synced" : ""}`}>{clockSynced ? "Synced" : "Syncing"}</span></div>
       <output className="timecode-display" aria-label={`Current time ${center?.display ?? "syncing"}`}>{center?.display ?? "--:--:--.---"}</output>
@@ -862,12 +949,24 @@ function TimePage({ data, user, run }: { data: AppData; user: Profile; run: (act
 }
 
 type ChatMember = Pick<Profile, "id" | "fullName" | "avatarUrl" | "role" | "jobTitle">;
-function CrewChatPage({ user }: { user: Profile }) {
+function chatFileUrl(path: string) { return `/api/chat/media?path=${encodeURIComponent(path)}`; }
+function ChatAttachmentPreview({ attachment }: { attachment: ChatAttachment }) {
+  const source = attachment.dataUrl ?? (attachment.path ? chatFileUrl(attachment.path) : "");
+  if (!source) return null;
+  if (attachment.type.startsWith("image/")) return <a className="chat-attachment-image-link" href={source} target="_blank" rel="noreferrer"><NextImage unoptimized src={source} alt={attachment.name} width={280} height={220} className="chat-attachment-image" /></a>;
+  if (attachment.type.startsWith("video/")) return <video className="chat-attachment-video" controls preload="metadata" src={source}>{attachment.name}</video>;
+  if (attachment.type.startsWith("audio/")) return <audio className="chat-attachment-audio" controls preload="metadata" src={source}>{attachment.name}</audio>;
+  return <a className="chat-attachment-file" href={source} target="_blank" rel="noreferrer"><FileText size={17} /><span><strong>{attachment.name}</strong><small>{formatFileSize(attachment.size)}</small></span><ArrowDownToLine size={14} /></a>;
+}
+function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mode"] }) {
   const [conversationType, setConversationType] = useState<"all" | "direct">("all");
   const [recipientId, setRecipientId] = useState("");
   const [members, setMembers] = useState<ChatMember[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
@@ -879,20 +978,14 @@ function CrewChatPage({ user }: { user: Profile }) {
   const [freshMessageIds, setFreshMessageIds] = useState<Set<string>>(() => new Set());
   const freshMessageTimer = useRef<number | null>(null);
   const recipient = members.find((member) => member.id === recipientId);
+  const replyAuthor = replyTo ? replyTo.senderId === user.id ? "You" : members.find((member) => member.id === replyTo.senderId)?.fullName ?? "Team member" : "";
 
   useEffect(() => {
-    if (conversationType === "direct" && !recipientId) {
-      setMessages([]);
-      setLoading(false);
-      shouldScrollToBottom.current = true;
-      return;
-    }
+    if (conversationType === "direct" && !recipientId) return;
     let active = true;
     let firstLoad = true;
     let refreshing = false;
     knownMessageIds.current = null;
-    setFreshMessageIds(new Set());
-    setMessages([]);
     shouldScrollToBottom.current = true;
     const refresh = async () => {
       if (refreshing) return;
@@ -953,12 +1046,12 @@ function CrewChatPage({ user }: { user: Profile }) {
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const body = draft.trim();
-    if (!body || sendingRef.current || (conversationType === "direct" && !recipientId)) return;
+    if ((!body && !pendingAttachments.length) || sendingRef.current || uploadingFiles || (conversationType === "direct" && !recipientId)) return;
     sendingRef.current = true;
     setSending(true);
     setError("");
     try {
-      const response = await fetch("/api/chat", { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationType, recipientId: conversationType === "direct" ? recipientId : undefined, body }) });
+      const response = await fetch("/api/chat", { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationType, recipientId: conversationType === "direct" ? recipientId : undefined, body, replyToId: replyTo?.id, attachments: pendingAttachments }) });
       const result = await response.json() as { message?: ChatMessage; error?: string };
       if (!response.ok || !result.message) throw new Error(result.error || "Message could not be sent.");
       knownMessageIds.current?.add(result.message.id);
@@ -969,29 +1062,67 @@ function CrewChatPage({ user }: { user: Profile }) {
       isAtBottom.current = true;
       setMessages((current) => current.some((message) => message.id === result.message!.id) ? current : [...current, result.message!]);
       setDraft("");
+      setPendingAttachments([]);
+      setReplyTo(null);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Message could not be sent."); }
     finally { sendingRef.current = false; setSending(false); }
+  };
+
+  const attachFiles = async (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = "";
+    if (!files.length) return;
+    setUploadingFiles(true); setError("");
+    try {
+      const next: ChatAttachment[] = [];
+      for (const original of files) {
+        const file = await prepareChatFile(original);
+        if (mode === "demo") {
+          if (file.size > 2_000_000) throw new Error("Local demo attachments must be 2 MB or smaller. Use the connected app for larger files.");
+          next.push({ dataUrl: await fileAsDataUrl(file), name: file.name, type: file.type, size: file.size });
+        } else {
+          const form = new FormData(); form.append("file", file);
+          const response = await fetch("/api/chat/media", { method: "POST", body: form, cache: "no-store" });
+          const result = await response.json() as { attachment?: ChatAttachment; error?: string };
+          if (!response.ok || !result.attachment) throw new Error(result.error ?? `Could not upload ${file.name}.`);
+          next.push(result.attachment);
+        }
+      }
+      setPendingAttachments((current) => [...current, ...next]);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Files could not be attached."); }
+    finally { setUploadingFiles(false); }
   };
 
   return <>
     <section className="panel crew-chat-panel">
       <div className="crew-chat-toolbar">
-        <button type="button" className={`crew-chat-room-button ${conversationType === "all" ? "is-active" : ""}`} onClick={() => setConversationType("all")}><Users size={16} /><span><strong>All chat</strong><small>Everyone on the crew</small></span></button>
-        <label className="form-field crew-chat-recipient"><span>Choose someone to talk to</span><select value={recipientId} onChange={(event) => { const selectedId = event.currentTarget.value; setRecipientId(selectedId); setConversationType(selectedId ? "direct" : "all"); }}><option value="">Select a team member…</option>{members.map((member) => <option key={member.id} value={member.id}>{member.fullName} · {member.jobTitle || member.role}</option>)}</select></label>
+        <button type="button" className={`crew-chat-room-button ${conversationType === "all" ? "is-active" : ""}`} onClick={() => { setMessages([]); setFreshMessageIds(new Set()); setLoading(true); setConversationType("all"); setRecipientId(""); setReplyTo(null); }}><Users size={16} /><span><strong>All chat</strong><small>Everyone on the crew</small></span></button>
+        <label className="form-field crew-chat-recipient"><span>Choose someone to talk to</span><select value={recipientId} onChange={(event) => { const selectedId = event.currentTarget.value; setMessages([]); setFreshMessageIds(new Set()); setLoading(true); setRecipientId(selectedId); setConversationType(selectedId ? "direct" : "all"); setReplyTo(null); }}><option value="">Select a team member…</option>{members.map((member) => <option key={member.id} value={member.id}>{member.fullName} · {member.jobTitle || member.role}</option>)}</select></label>
       </div>
       <div className="crew-chat-heading"><div>{conversationType === "all" ? <><span className="eyebrow">TEAM ROOM</span><h3>All chat</h3></> : <><ProfileAvatar name={recipient?.fullName ?? "Team member"} src={recipient?.avatarUrl} className="chat-heading-avatar" /><span><h3>{recipient?.fullName ?? "Direct chat"}</h3><small>{recipient?.jobTitle || recipient?.role || "Team member"}</small></span></>}</div><span className="chat-live-indicator"><i />Updates automatically</span></div>
       <div ref={messagesRef} onScroll={updateScrollPosition} className="crew-chat-messages" aria-live="polite" aria-label={conversationType === "all" ? "All crew messages" : `Messages with ${recipient?.fullName ?? "team member"}`}>
-        {loading ? <div className="crew-chat-empty">Loading messages…</div> : messages.length ? messages.map((message) => {
+        {conversationType === "direct" && !recipientId ? <div className="crew-chat-empty">Choose a team member to start a direct chat.</div> : loading ? <div className="crew-chat-empty">Loading messages…</div> : messages.length ? messages.map((message) => {
           const isOwn = message.senderId === user.id;
           const author = isOwn ? user : members.find((member) => member.id === message.senderId);
+          const receiptAudience = conversationType === "direct" ? members.filter((member) => member.id === recipientId) : members;
+          const readIds = new Set((message.receipts ?? []).map((receipt) => receipt.userId));
+          const seenMembers = receiptAudience.filter((member) => readIds.has(member.id));
+          const unseenMembers = receiptAudience.filter((member) => !readIds.has(member.id));
           return <article key={message.id} className={`chat-message-row ${isOwn ? "is-own" : ""} ${freshMessageIds.has(message.id) ? "is-new-arrival" : ""}`}>
             <ProfileAvatar name={author?.fullName ?? "Team member"} src={author?.avatarUrl} className="chat-avatar" />
-            <div className="chat-message-content"><div className="chat-message-meta"><strong>{isOwn ? "You" : author?.fullName ?? "Team member"}</strong><time dateTime={message.createdAt}>{formatStamp(message.createdAt)}</time></div><p>{message.body}</p></div>
+             <div className="chat-message-content"><div className="chat-message-meta"><strong>{isOwn ? "You" : author?.fullName ?? "Team member"}</strong><time dateTime={message.createdAt}>{formatStamp(message.createdAt)}</time></div>
+               {message.reply && <div className="chat-reply-quote"><strong>{message.reply.senderId === user.id ? "You" : members.find((member) => member.id === message.reply?.senderId)?.fullName ?? "Team member"}</strong><span>{message.reply.body || "Attachment"}</span></div>}
+               {message.body && <p>{message.body}</p>}
+               {message.attachments?.length ? <div className="chat-attachment-list">{message.attachments.map((attachment, index) => <ChatAttachmentPreview attachment={attachment} key={`${message.id}-file-${index}`} />)}</div> : null}
+               <div className="chat-message-footer"><button type="button" className="chat-reply-button" onClick={() => setReplyTo(message)}><Reply size={13} />Reply</button>{isOwn && <details className="chat-reader-details"><summary className="chat-readers" aria-label={`${seenMembers.length} seen, ${unseenMembers.length} not seen`}>{seenMembers.slice(0, 8).map((reader) => <ProfileAvatar key={reader.id} name={reader.fullName} src={reader.avatarUrl} className="chat-reader-avatar" />)}<small>{seenMembers.length ? `${seenMembers.length} seen` : "Sent"}</small></summary><div className="chat-reader-popover"><div><strong>Seen</strong><span>{seenMembers.map((reader) => reader.fullName).join(", ") || "No one yet"}</span></div><div><strong>Not seen</strong><span>{unseenMembers.map((reader) => reader.fullName).join(", ") || "Everyone has seen it"}</span></div></div></details>}</div>
+             </div>
           </article>;
         }) : <div className="crew-chat-empty"><MessageCircle size={22} /><strong>{conversationType === "all" ? "Start the crew conversation" : "No messages yet"}<small>Send a message to get the conversation started.</small></strong></div>}
       </div>
       {error && <p className="crew-chat-error" role="alert">{error}</p>}
-      <form className="crew-chat-composer" onSubmit={sendMessage}><textarea aria-label="Write a message" maxLength={2000} placeholder={conversationType === "direct" && !recipientId ? "Choose a team member first" : "Write a message…"} value={draft} onChange={(event) => setDraft(event.currentTarget.value)} disabled={conversationType === "direct" && !recipientId} /><button className="button button-primary" type="submit" disabled={sending || !draft.trim() || (conversationType === "direct" && !recipientId)}><Send size={15} />{sending ? "Sending…" : "Send"}</button></form>
+      {replyTo && <div className="chat-reply-composer"><span><strong>Replying to {replyAuthor}</strong><small>{replyTo.body || "Attachment"}</small></span><button type="button" className="icon-button" onClick={() => setReplyTo(null)} aria-label="Cancel reply"><X size={15} /></button></div>}
+      {pendingAttachments.length > 0 && <div className="chat-pending-files">{pendingAttachments.map((attachment, index) => <div className="chat-pending-file" key={`${attachment.name}-${index}`}><span>{attachment.name} · {formatFileSize(attachment.size)}</span><button type="button" className="icon-button" aria-label={`Remove ${attachment.name}`} onClick={() => setPendingAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button></div>)}</div>}
+      <form className="crew-chat-composer" onSubmit={sendMessage}><label className="chat-attach-button" title="Attach photos, videos, audio, or files"><Paperclip size={18} /><input aria-label="Attach photos, videos, audio, or files" type="file" multiple accept="image/*,video/mp4,video/webm,video/quicktime,audio/mpeg,audio/mp4,.m4a,.mp3,.pdf,.heic,.heif" onChange={attachFiles} /></label><textarea aria-label="Write a message" maxLength={2000} placeholder={conversationType === "direct" && !recipientId ? "Choose a team member first" : "Write a message…"} value={draft} onChange={(event) => setDraft(event.currentTarget.value)} disabled={conversationType === "direct" && !recipientId} /><button className="button button-primary" type="submit" disabled={sending || uploadingFiles || (!draft.trim() && !pendingAttachments.length) || (conversationType === "direct" && !recipientId)}><Send size={15} />{uploadingFiles ? "Uploading…" : sending ? "Sending…" : "Send"}</button></form>
     </section>
   </>;
 }
@@ -1086,7 +1217,8 @@ function EventsPage({ data, user, searchMatch, openModal, run }: { data: AppData
                 <span><small>SETUP · {event.timeZone}</small><strong>{displayTime(event.setupTime)}</strong></span>
                 <span><small>EVENT LEAD</small><strong>{eventLead?.fullName ?? "Unassigned"}</strong></span>
                 <span><small>PRODUCTION</small><strong>{[event.livestream && "Livestream", event.recording && "Recording", event.photography && "Photography"].filter(Boolean).join(" · ") || "Standard coverage"}</strong></span>
-                <span><small>CURRENT PROGRAM PHASE</small><strong>{event.programPhase ?? phaseOptions(data)[0]}</strong></span>
+                 <span><small>CURRENT PROGRAM PHASE</small><strong>{event.programPhase ?? phaseOptions(data)[0]}</strong></span>
+                 <span><small>PROGRAM STATUS</small><strong>{event.startedAt ? `Started ${formatStamp(event.startedAt)}` : "Not started"}{event.endedAt ? ` · Ended ${formatStamp(event.endedAt)}` : ""}</strong></span>
                 {manage && <div className="program-phase-picker-field"><span>Change program phase</span><ProgramPhaseButtons data={data} event={event} onSelect={(phase) => void run("set_event_program_phase", { eventId: event.id, programPhase: phase })} /><small>Required checklist tasks from earlier phases become urgent.</small></div>}
                 <div className="event-crew-assignment">
                   <small>CREW ATTENDANCE · {eventCrew.filter((assignment) => assignment.response === "Accepted").length} attending · {eventCrew.filter((assignment) => assignment.response === "Declined").length} not attending · {eventCrew.filter((assignment) => assignment.response === "Pending").length} awaiting</small>
@@ -1111,6 +1243,9 @@ function EventsPage({ data, user, searchMatch, openModal, run }: { data: AppData
                 </div>
               </div>}
               <div className="event-management-actions">
+                {manage && event.status === "Published" && !event.startedAt && <button className="button button-small button-primary event-action-button" onClick={() => void run("start_event_program", { eventId: event.id })}>Start program</button>}
+                {manage && event.status === "Published" && event.startedAt && !event.endedAt && <button className="button button-small button-danger event-action-button" onClick={() => { if (window.confirm(`End the program “${event.title}” and notify its crew?`)) void run("end_event_program", { eventId: event.id }); }}>End program</button>}
+                {admin && <button className="button button-small button-quiet event-action-button" onClick={() => openModal({ type: "event-report", id: event.id })}>Event report</button>}
                 {manage && event.status !== "Completed" && <button className="button button-small button-quiet event-action-button" onClick={() => openModal({ type: "edit-event", id: event.id })}>Edit</button>}
                 {manage && event.status === "Planning" && <button className="button button-small button-primary event-action-button" onClick={() => void run("publish_event", { eventId: event.id })}>Publish</button>}
                 {admin && <button className="button button-small button-danger event-action-button" onClick={() => { if (window.confirm('Delete “' + event.title + '”? Its checklist items will be removed. Incident reports will be kept.')) void run("delete_event", { eventId: event.id }); }}>Delete</button>}
@@ -1159,7 +1294,7 @@ function TeamPage({ data, user, context, openModal, refreshKey }: { data: AppDat
     {canManageAccounts && !accountsReady && <div className="sop-notice team-account-notice"><ShieldCheck size={17} /><span><strong>Account management is not connected.</strong> Add the server-side account key and apply the team account migration to enable username sign-in and account changes.</span></div>}
     {accountError && <div className="sop-notice team-account-notice"><AlertTriangle size={17} /><span>{accountError}</span></div>}
     <div className="team-role-strip">{accessRoles.map((role) => <div className="team-role-chip" key={role}><strong>{accountsReady ? accounts.filter((item) => (item.accessRoles ?? [item.role]).includes(role)).length : roleCounts.get(role) ?? 0}</strong><span>{role}</span></div>)}</div>
-    {memberRows.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>TEAM MEMBER</th><th>PRODUCTION ROLE</th><th>USERNAME</th><th>APP ACCESS ROLES</th>{accountsReady && <><th>PASSWORD / SIGN-IN</th><th>ACTIONS</th></>}</tr></thead><tbody>{memberRows.map((profile) => { const accountState = !profile.active ? "Disabled" : context.mode === "demo" ? "Password set" : profile.lastSignInAt ? "Account active" : "Invitation pending"; const protectedAdministrator = !administrator && (profile.accessRoles ?? [profile.role]).includes("Administrator"); const protectedTitle = protectedAdministrator ? "Only an administrator can change this account." : undefined; return <tr key={profile.id}><td><div className="table-person"><ProfileAvatar name={profile.fullName} src={profile.avatarUrl} className="avatar table-avatar" /><span><strong>{profile.fullName}</strong>{protectedAdministrator && <small className="table-subline">Administrator account · protected</small>}</span></div></td><td>{profile.jobTitle || "—"}</td><td>{profile.username || "—"}</td><td><span className="role-chip">{(profile.accessRoles ?? [profile.role]).join(" · ")}</span></td>{accountsReady && <><td><StatusPill tone={!profile.active ? "neutral" : profile.lastSignInAt || context.mode === "demo" ? "success" : "warning"}>{accountState}</StatusPill></td><td><div className="team-account-actions"><button className="button button-small button-quiet" disabled={protectedAdministrator} title={protectedTitle} onClick={() => openModal({ type: "edit-member", id: profile.id, member: profile })}>Edit</button>{administrator && <button className="button button-small button-quiet" disabled={!profile.active} onClick={() => openModal({ type: "set-member-password", member: profile })}>Set password</button>}</div></td></>}</tr>; })}</tbody></table></div> : <EmptyState icon={Users} title={canManageAccounts && accountsReady ? "No team accounts yet" : "Team details are restricted"} detail="Add a member with a username and one or more app access roles." />}
+     {memberRows.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>TEAM MEMBER</th><th>PRODUCTION ROLE</th><th>USERNAME</th><th>APP ACCESS ROLES</th>{accountsReady && <><th>PASSWORD / SIGN-IN</th><th>ACTIONS</th></>}</tr></thead><tbody>{memberRows.map((profile) => { const accountState = !profile.active ? "Disabled" : context.mode === "demo" ? "Password set" : profile.lastSignInAt ? "Account active" : "Invitation pending"; const protectedAdministrator = !administrator && (profile.accessRoles ?? [profile.role]).includes("Administrator"); const protectedTitle = protectedAdministrator ? "Only an administrator can change this account." : undefined; return <tr key={profile.id}><td><div className="table-person"><ProfileAvatar name={profile.fullName} src={profile.avatarUrl} className="avatar table-avatar" /><span><strong>{profile.fullName}</strong>{protectedAdministrator && <small className="table-subline">Administrator account · protected</small>}</span></div></td><td>{profile.jobTitle || "—"}</td><td>{profile.username || "—"}</td><td><span className="role-chip">{(profile.accessRoles ?? [profile.role]).join(" · ")}</span>{canManageAccounts && <button className="button button-small button-quiet role-edit-button" disabled={protectedAdministrator} title={protectedTitle} onClick={() => openModal({ type: "edit-member-roles", id: profile.id, member: profile })}>Edit roles</button>}</td>{accountsReady && <><td><StatusPill tone={!profile.active ? "neutral" : profile.lastSignInAt || context.mode === "demo" ? "success" : "warning"}>{accountState}</StatusPill></td><td><div className="team-account-actions"><button className="button button-small button-quiet" disabled={protectedAdministrator} title={protectedTitle} onClick={() => openModal({ type: "edit-member", id: profile.id, member: profile })}>Edit</button>{administrator && <button className="button button-small button-quiet" disabled={!profile.active} onClick={() => openModal({ type: "set-member-password", member: profile })}>Set password</button>}</div></td></>}</tr>; })}</tbody></table></div> : <EmptyState icon={Users} title={canManageAccounts && accountsReady ? "No team accounts yet" : "Team details are restricted"} detail="Add a member with a username and one or more app access roles." />}
   </>;
 }
 
@@ -1242,7 +1377,150 @@ function ChecklistsPage({ data, user, openModal, run }: { data: AppData; user: P
   </>;
 }
 
-function SopPage({ data, user, searchMatch, openModal }: { data: AppData; user: Profile; searchMatch: (value: string) => boolean; openModal: (state: ModalState) => void }) {
+function defaultSopContent(sop?: AppData["sops"][number]): SopContentBlock[] {
+  if (sop?.contentBlocks?.length) return sop.contentBlocks;
+  const blocks: SopContentBlock[] = [];
+  if (sop?.summary) blocks.push({ kind: "body", text: sop.summary, fontSize: 16 });
+  for (const step of sop?.steps ?? []) blocks.push({ kind: "body", text: step, fontSize: 16 });
+  return blocks;
+}
+function sopImageSource(block: Extract<SopContentBlock, { kind: "image" }>, sopId: string) {
+  return block.dataUrl ?? (block.path ? `/api/sops/media?path=${encodeURIComponent(block.path)}&sopId=${encodeURIComponent(sopId)}` : "");
+}
+function escapeEditorMarkup(value: string) {
+  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
+}
+function sopBlocksToEditorHtml(blocks: SopContentBlock[], sopId: string) {
+  return blocks.map((block) => {
+    if (block.kind === "image") {
+      const src = escapeEditorMarkup(sopImageSource(block, sopId));
+      return `<p><img data-iac-sop-image="true" data-sop-path="${escapeEditorMarkup(block.path ?? "")}" data-sop-data-url="${escapeEditorMarkup(block.dataUrl ?? "")}" alt="${escapeEditorMarkup(block.alt)}" src="${src}" /></p>`;
+    }
+    const tag = block.kind === "title" ? "h1" : block.kind === "heading" ? "h2" : block.kind === "subheading" ? "h3" : "p";
+    const fontSize = Math.min(48, Math.max(10, block.fontSize));
+    return `<${tag} style="font-size:${fontSize}px">${escapeEditorMarkup(block.text)}</${tag}>`;
+  }).join("") || "<p><br></p>";
+}
+function sopEditorHtmlToBlocks(root: HTMLDivElement): SopContentBlock[] {
+  const blocks: SopContentBlock[] = [];
+  const defaults = { title: 32, heading: 24, subheading: 19, body: 16 };
+  const appendText = (text: string, kind: "title" | "heading" | "subheading" | "body", fontSize: number) => {
+    if (!text) return;
+    const previous = blocks.at(-1);
+    if (previous && previous.kind !== "image" && previous.kind === kind && previous.fontSize === fontSize) previous.text += text;
+    else blocks.push({ kind, text, fontSize });
+  };
+  const walk = (node: Node, kind: "title" | "heading" | "subheading" | "body", fontSize: number) => {
+    if (node.nodeType === Node.TEXT_NODE) { appendText(node.textContent ?? "", kind, fontSize); return; }
+    if (!(node instanceof HTMLElement)) return;
+    if (node.tagName === "IMG" && node.dataset.iacSopImage === "true") {
+      const image = node as HTMLImageElement;
+      const path = node.dataset.sopPath ?? "";
+      const dataUrl = node.dataset.sopDataUrl ?? "";
+      if (Boolean(path) !== Boolean(dataUrl)) blocks.push({ kind: "image", ...(path ? { path } : { dataUrl }), alt: image.alt });
+      return;
+    }
+    if (node.tagName === "BR") { appendText("\n", kind, fontSize); return; }
+    const nextKind = node.tagName === "H1" ? "title" : node.tagName === "H2" ? "heading" : node.tagName === "H3" ? "subheading" : kind;
+    const parsedSize = Number.parseFloat(node.style.fontSize);
+    const nextSize = Number.isFinite(parsedSize) ? Math.min(48, Math.max(10, Math.round(parsedSize))) : node.tagName.startsWith("H") ? defaults[nextKind] : fontSize;
+    if (["P", "DIV", "H1", "H2", "H3", "LI"].includes(node.tagName) && blocks.length && blocks.at(-1)?.kind !== "image") appendText("\n", nextKind, nextSize);
+    for (const child of Array.from(node.childNodes)) walk(child, nextKind, nextSize);
+  };
+  for (const child of Array.from(root.childNodes)) walk(child, "body", 16);
+  return blocks.filter((block) => block.kind === "image" || Boolean(block.text.trim()));
+}
+function RichSopEditor({ mode, sopId, initialBlocks }: { mode: SessionContext["mode"]; sopId?: string; initialBlocks: SopContentBlock[] }) {
+  const [blocks, setBlocks] = useState<SopContentBlock[]>(initialBlocks);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+  const editorRef = useRef<HTMLDivElement>(null);
+  const savedSelection = useRef<Range | null>(null);
+  const [initialHtml] = useState(() => sopBlocksToEditorHtml(initialBlocks, sopId ?? "draft"));
+  const syncEditor = () => { if (editorRef.current) setBlocks(sopEditorHtmlToBlocks(editorRef.current)); };
+  const rememberSelection = () => {
+    const editor = editorRef.current;
+    const selection = window.getSelection();
+    if (editor && selection?.rangeCount && editor.contains(selection.anchorNode)) savedSelection.current = selection.getRangeAt(0).cloneRange();
+  };
+  const applyBlockFormat = (tag: "h1" | "h2" | "h3" | "p") => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    editor.focus();
+    document.execCommand("formatBlock", false, tag);
+    syncEditor();
+  };
+  const applyFontSize = (event: ChangeEvent<HTMLSelectElement>) => {
+    const editor = editorRef.current;
+    const range = savedSelection.current;
+    const size = Number(event.currentTarget.value);
+    if (!editor || !range || !editor.contains(range.commonAncestorContainer) || range.collapsed) { setError("Select the text you want to resize, then choose a font size."); return; }
+    editor.focus();
+    const selection = window.getSelection();
+    if (selection) { selection.removeAllRanges(); selection.addRange(range); }
+    const span = document.createElement("span"); span.style.fontSize = `${size}px`;
+    try { range.surroundContents(span); }
+    catch { span.append(range.extractContents()); range.insertNode(span); }
+    syncEditor();
+    rememberSelection();
+  };
+  const uploadImage = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0]; event.currentTarget.value = "";
+    if (!file) return;
+    setUploading(true); setError("");
+    try {
+      if (!file.type.startsWith("image/") || file.size > 15 * 1024 * 1024) throw new Error("Choose a JPG, PNG, WebP, or GIF image under 15 MB.");
+      if (mode === "demo") {
+        if (file.size > 2_000_000) throw new Error("Local demo SOP images must be 2 MB or smaller.");
+        const dataUrl = await fileAsDataUrl(file);
+        insertEditorImage({ kind: "image", dataUrl, alt: file.name });
+      } else {
+        const form = new FormData(); form.append("file", file); form.append("sopId", sopId ?? "draft");
+        const response = await fetch("/api/sops/media", { method: "POST", cache: "no-store", body: form });
+        const result = await response.json() as { path?: string; error?: string };
+        if (!response.ok || !result.path) throw new Error(result.error ?? "SOP image upload failed.");
+        insertEditorImage({ kind: "image", path: result.path, alt: file.name });
+      }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "This image could not be added."); }
+    finally { setUploading(false); }
+  };
+  const insertEditorImage = (block: Extract<SopContentBlock, { kind: "image" }>) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const image = document.createElement("img");
+    image.dataset.iacSopImage = "true"; image.dataset.sopPath = block.path ?? ""; image.dataset.sopDataUrl = block.dataUrl ?? "";
+    image.src = sopImageSource(block, sopId ?? "draft"); image.alt = block.alt || "Procedure image"; image.contentEditable = "false";
+    image.className = "rich-sop-inline-image";
+    const range = savedSelection.current;
+    if (range && editor.contains(range.commonAncestorContainer)) {
+      range.deleteContents(); range.insertNode(image);
+      const spacer = document.createTextNode("\u00a0"); range.setStartAfter(image); range.insertNode(spacer); range.setStartAfter(spacer); range.collapse(true);
+      const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
+    } else {
+      const paragraph = document.createElement("p"); paragraph.append(image, document.createTextNode("\u00a0")); editor.append(paragraph);
+    }
+    editor.focus(); syncEditor();
+  };
+  const onEditorPaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    document.execCommand("insertText", false, event.clipboardData.getData("text/plain"));
+    syncEditor();
+  };
+  return <section className="rich-sop-editor"><div className="rich-sop-toolbar" aria-label="Format procedure text"><button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => applyBlockFormat("h1")}>Title</button><button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => applyBlockFormat("h2")}>Heading</button><button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => applyBlockFormat("h3")}>Subheading</button><button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => applyBlockFormat("p")}>Body text</button><label className="rich-sop-font-size"><span>Font size</span><select aria-label="Font size" defaultValue="16" onMouseDown={rememberSelection} onChange={applyFontSize}>{[10,12,14,16,18,20,24,28,32,40,48].map((size) => <option value={size} key={size}>{size} px</option>)}</select></label><label className="rich-sop-image-button" onMouseDown={rememberSelection}><ImagePlus size={15} />{uploading ? "Uploading…" : "Insert image"}<input type="file" accept="image/jpeg,image/png,image/webp,image/gif" onClick={rememberSelection} onChange={uploadImage} disabled={uploading} /></label></div>
+    <div ref={editorRef} className="rich-sop-canvas" contentEditable suppressContentEditableWarning role="textbox" aria-label="Full SOP procedure editor" aria-multiline="true" dangerouslySetInnerHTML={{ __html: initialHtml }} onInput={() => { setError(""); syncEditor(); }} onMouseUp={rememberSelection} onKeyUp={rememberSelection} onPaste={onEditorPaste} />
+    <p className="rich-sop-editor-help">Write the entire procedure in one editor. Select text to resize it. Use the toolbar for titles and headings; insert images at the current cursor. Select an image and press Backspace to remove it.</p>
+    <input type="hidden" name="richContent" value={JSON.stringify(blocks)} />
+    {error && <small role="alert" className="rich-sop-error">{error}</small>}
+    {!blocks.length && <div className="rich-sop-empty">Write instructions or insert an image in the procedure editor.</div>}</section>;
+}
+function SopRichContentView({ sop }: { sop: AppData["sops"][number] }) {
+  const [expanded, setExpanded] = useState(false);
+  const blocks = defaultSopContent(sop);
+  const visible = expanded ? blocks : blocks.slice(0, 6);
+  return <><div className="sop-rich-reader">{visible.map((block, index) => block.kind === "image" ? <div className="sop-rich-reader-image" key={`sop-image-${index}`}><NextImage unoptimized src={sopImageSource(block, sop.id)} alt={block.alt || "Procedure image"} width={920} height={560} /></div> : <div className={`sop-rich-reader-text sop-rich-${block.kind}`} style={{ fontSize: `${block.fontSize}px` }} key={`sop-text-${index}`}>{block.text}</div>)}</div>{blocks.length > 6 && <button type="button" className="button button-small button-quiet sop-show-more" onClick={() => setExpanded((value) => !value)}>{expanded ? "Show less" : `Show more (${blocks.length - 6} sections)`}</button>}</>;
+}
+
+function SopPage({ data, user, searchMatch, openModal, run }: { data: AppData; user: Profile; searchMatch: (value: string) => boolean; openModal: (state: ModalState) => void; run: (action: string, payload?: Record<string, unknown>) => Promise<void> }) {
   const [category, setCategory] = useState("All procedures");
   const [showAll, setShowAll] = useState(false);
   const manager = hasManagerAccess(user.accessRoles, user.role);
@@ -1253,7 +1531,7 @@ function SopPage({ data, user, searchMatch, openModal }: { data: AppData; user: 
   return <><PageIntro title="Standard operating procedures" detail="Published procedures are available to the team. Draft technical templates require review before use." />
     <div className="sop-notice"><ShieldCheck size={18} /><span><strong>Technical details require local verification.</strong> This library contains development templates only. Do not assume a device configuration, wiring path, address, or credential from an unreviewed draft.</span></div>
     <div className="filter-row"><div className="category-tabs">{categories.map((item) => <button className={category === item ? "active" : ""} key={item} onClick={() => setCategory(item)}>{item}</button>)}</div><div className="filter-note"><BookOpen size={14} />{data.sops.filter((item) => item.status === "Published").length} published</div>{canEditCategories && <CategoryManagerButton kind="sops" openModal={openModal} />}{!manager && <button className={`button button-small ${showAll ? "button-primary" : "button-quiet"}`} onClick={() => setShowAll((value) => !value)}>{showAll ? "Show assigned SOPs" : "See all SOPs"}</button>}</div>
-    {sops.length ? <div className="sop-grid">{sops.map((sop) => <article className="sop-card" key={sop.id}><button type="button" className="sop-card-open" onClick={() => openModal({ type: "read-sop", id: sop.id })}><div className="sop-card-top"><span className="sop-card-icon"><BookOpen size={18} /></span><StatusPill tone={sop.status === "Published" ? "success" : "warning"}>{sop.status}</StatusPill></div><span className="asset-code">{sop.category.toUpperCase()} · VERSION {sop.version}</span><h3>{sop.title}</h3><p>{sop.summary}</p><div className="sop-card-foot"><span>{sop.steps.length} steps</span><span>{sop.reviewRequired ? "Review required" : `Updated ${formatStamp(sop.updatedAt)}`}<ArrowRight size={14} /></span></div></button>{manager && <button type="button" className="button button-small button-quiet sop-audience-button" onClick={() => openModal({ type: "edit-sop-audience", id: sop.id })}>Choose crew visibility</button>}</article>)}</div> : <EmptyState icon={BookOpen} title="No procedures match" detail="Try a different category or search phrase." />}
+     {sops.length ? <div className="sop-grid">{sops.map((sop) => <article className="sop-card" key={sop.id}><button type="button" className="sop-card-open" onClick={() => openModal({ type: "read-sop", id: sop.id })}><div className="sop-card-top"><span className="sop-card-icon"><BookOpen size={18} /></span><StatusPill tone={sop.status === "Published" ? "success" : "warning"}>{sop.status}</StatusPill></div><span className="asset-code">{sop.category.toUpperCase()} · VERSION {sop.version}</span><h3>{sop.title}</h3><p>{sop.summary}</p><div className="sop-card-foot"><span>{sop.contentBlocks?.length ?? sop.steps.length} sections</span><span>{sop.reviewRequired ? "Review required" : `Updated ${formatStamp(sop.updatedAt)}`}<ArrowRight size={14} /></span></div></button>{manager && <div className="sop-manager-actions"><button type="button" className="button button-small button-quiet sop-audience-button" onClick={() => openModal({ type: "edit-sop-audience", id: sop.id })}>Choose crew visibility</button><button type="button" className="button button-small button-quiet" onClick={() => openModal({ type: "edit-sop", id: sop.id })}>Edit</button><button type="button" className="button button-small button-quiet danger-text" onClick={() => { if (window.confirm(`Delete “${sop.title}” and its saved versions? This cannot be undone.`)) void run("delete_sop", { sopId: sop.id }); }}>Delete</button></div>}</article>)}</div> : <EmptyState icon={BookOpen} title="No procedures match" detail="Try a different category or search phrase." />}
   </>;
 }
 
@@ -1476,6 +1754,9 @@ function Modal({ state, data, user, context, onClose, openModal, onSubmit, run, 
   const event = data.events.find((item) => item.id === state.id);
   const eventAssignment = event && data.assignments.find((assignment) => assignment.eventId === event.id && assignment.userId === user.id);
   const eventCrew = event ? data.assignments.filter((assignment) => assignment.eventId === event.id) : [];
+  const eventChecklistItems = event ? data.checklistItems.filter((item) => item.eventId === event.id) : [];
+  const eventIncidents = event ? data.incidents.filter((item) => item.eventId === event.id) : [];
+  const eventTimeline = event ? [...(data.eventActivity ?? []).filter((item) => item.eventId === event.id)].sort((a, b) => a.occurredAt.localeCompare(b.occurredAt)) : [];
   
   const asset = data.assets.find((item) => item.id === state.id);
   const assetActiveLoans = data.loans.filter((item) => item.assetId === asset?.id && !item.returnAt);
@@ -1492,9 +1773,9 @@ function Modal({ state, data, user, context, onClose, openModal, onSubmit, run, 
   const loanBorrower = loan && data.profiles.find((item) => item.id === loan.borrowerId);
   const actorIsAdministrator = hasAccessRole(context.user.accessRoles, context.user.role, "Administrator");
   const title: Record<string, string> = {
-    "create-event": "Create an event", "edit-event": "Edit event", "create-asset": "Add equipment asset", "edit-asset": "Edit equipment asset", "checkout-equipment": "Log equipment handoff", "report-incident": "Report an issue", "edit-incident": "Edit incident record", "flag-check": "Report a failed check", "resolve-incident": "Record incident resolution", "complete-own-incident": "Complete incident job", "manage-categories": `Manage ${state.id ?? "record"} categories`, "create-sop": "Create an SOP draft", "edit-sop-audience": `Choose who can see ${sop?.title ?? "this SOP"}`, "read-sop": sop?.title ?? "Procedure", "publish-sop": "Publish reviewed procedure", "return-equipment": "Inspect and return equipment", "show-event": event?.title ?? "Event details",
+     "create-event": "Create an event", "edit-event": "Edit event", "create-asset": "Add equipment asset", "edit-asset": "Edit equipment asset", "checkout-equipment": "Log equipment handoff", "report-incident": "Report an issue", "edit-incident": "Edit incident record", "flag-check": "Report a failed check", "resolve-incident": "Record incident resolution", "complete-own-incident": "Complete incident job", "manage-categories": `Manage ${state.id ?? "record"} categories`, "create-sop": "Create an SOP", "edit-sop": `Edit ${sop?.title ?? "SOP"}`, "edit-sop-audience": `Choose who can see ${sop?.title ?? "this SOP"}`, "read-sop": sop?.title ?? "Procedure", "publish-sop": "Publish reviewed procedure", "return-equipment": "Inspect and return equipment", "show-event": event?.title ?? "Event details", "event-report": `Program report · ${event?.title ?? "Event"}`,
     profile: "My profile", "create-checklist-item": "Add an item to a member’s checklist", "edit-checklist-item": "Edit checklist item", "delete-checklist-item": "Remove checklist item", "create-checklist-template": "Create checklist template", "edit-checklist-template": `Edit ${checklistTemplate?.name ?? "checklist template"}`, "quick-assign-checklist": `Send ${checklistTemplate?.name ?? "checklist template"}`, "create-equipment-template": "Create equipment template", "edit-equipment-template": `Edit ${equipmentTemplate?.name ?? "equipment template"}`, "quick-assign-equipment": `Assign ${equipmentTemplate?.name ?? "equipment template"}`,
-    "invite-member": "Add a team account", "edit-member": `Edit ${member?.fullName ?? "team member"}`, "set-member-password": `Set password for ${member?.fullName ?? "team member"}`, "credential-reveal": "Temporary sign-in details",
+    "invite-member": "Add a team account", "edit-member": `Edit ${member?.fullName ?? "team member"}`, "edit-member-roles": `Edit app access roles · ${member?.fullName ?? "team member"}`, "set-member-password": `Set password for ${member?.fullName ?? "team member"}`, "credential-reveal": "Temporary sign-in details",
   };
   const people = data.profiles.filter((item) => item.active !== false);
   const borrowers = people;
@@ -1507,7 +1788,7 @@ function Modal({ state, data, user, context, onClose, openModal, onSubmit, run, 
   const categoryKind = state.id as keyof NonNullable<AppData["categories"]>;
   const categoryOptions = categoryKind === "checklists" ? phaseOptions(data) : data.categories?.[categoryKind] ?? categoryDefaults[categoryKind] ?? [];
   const fixedChecklistPhases = categoryKind === "checklists";
-  return <div className="modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}><section className="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-head"><div><span className="eyebrow">IAC MEDIA OPERATIONS</span><h2 id="modal-title">{title[state.type] ?? "Details"}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19} /></button></div>
+   return <div className={`modal-backdrop ${state.type === "event-report" ? "event-report-backdrop" : ""}`} onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}><section className={`modal-dialog ${state.type === "read-sop" ? "modal-sop-reading" : ""} ${state.type === "event-report" ? "modal-event-report" : ""}`} role="dialog" aria-modal="true" aria-labelledby="modal-title"><div className="modal-head"><div><span className="eyebrow">IAC MEDIA OPERATIONS</span><h2 id="modal-title">{title[state.type] ?? "Details"}</h2></div><button className="icon-button" onClick={onClose} aria-label="Close dialog"><X size={19} /></button></div>
     {state.type === "profile" && <div className="profile-modal-content"><div className="profile-identity"><ProfileAvatar name={user.fullName} src={user.avatarUrl} className="avatar profile-dialog-avatar" /><span><strong>{user.fullName}</strong><small>{user.role} · {user.email || "Local account"}</small></span></div><form onSubmit={onSubmit("profile_update")} className="modal-form profile-modal-form"><Field label="Username" name="username" required defaultValue={user.username ?? ""} /><ProfilePhotoField name="avatarUrl" personName={user.fullName} initialValue={user.avatarUrl} /><div className="modal-help">You can update your username and profile picture here. Your name and team role are managed by the administrator.</div><ModalActions onClose={onClose} primary="Save profile" /></form><div className="profile-password-heading"><strong>Change password</strong><small>Your current password is never shown to the administrator or stored as readable text.</small></div><form onSubmit={onSubmit("profile_change_password")} className="modal-form profile-modal-form"><Field label="Current password" name="currentPassword" type="password" autoComplete="current-password" required /><div className="form-grid"><Field label="New password" name="newPassword" type="password" autoComplete="new-password" required minLength={4} /><Field label="Confirm new password" name="confirmPassword" type="password" autoComplete="new-password" required minLength={4} /></div><div className="modal-help">Use at least 4 characters. If you do not know your current password, ask the administrator to set a replacement first.</div><ModalActions onClose={onClose} primary="Change password" /></form></div>}
     {state.type === "manage-categories" && <div className="modal-form">{!fixedChecklistPhases && <form onSubmit={onSubmit("add_category")}><input type="hidden" name="categoryType" value={state.id ?? ""} /><Field label="Add a category" name="category" required minLength={2} placeholder="Category name" /><ModalActions onClose={onClose} primary="Add category" /></form>}{fixedChecklistPhases && <div className="modal-help">The five program phases are fixed. Use the arrows to choose their order.</div>}<div className="category-admin-list">{categoryOptions.map((category, index) => <div className="category-admin-row" key={category}><span>{category}</span><div className="category-admin-actions"><button className="icon-button" type="button" title="Move up" aria-label={`Move ${category} up`} disabled={index === 0} onClick={() => void run("reorder_categories", { categoryType: state.id, categories: categoryOptions.map((item, itemIndex) => itemIndex === index ? categoryOptions[index - 1] : itemIndex === index - 1 ? category : item) })}><ChevronDown className="category-move-up" size={14} /></button><button className="icon-button" type="button" title="Move down" aria-label={`Move ${category} down`} disabled={index === categoryOptions.length - 1} onClick={() => void run("reorder_categories", { categoryType: state.id, categories: categoryOptions.map((item, itemIndex) => itemIndex === index ? categoryOptions[index + 1] : itemIndex === index + 1 ? category : item) })}><ChevronDown size={14} /></button>{!fixedChecklistPhases && <form onSubmit={onSubmit("delete_category")}><input type="hidden" name="categoryType" value={state.id ?? ""} /><input type="hidden" name="category" value={category} /><button className="button button-small button-quiet" type="submit" title="Remove category" aria-label={`Remove ${category}`}><Trash2 size={14} />Remove</button></form>}</div></div>)}</div>{!fixedChecklistPhases && <div className="modal-help">Use the arrows to set the order. Removing a category keeps existing records unchanged; it only removes the option for new records.</div>}<div className="modal-actions"><button type="button" className="button button-quiet" onClick={onClose}>Done</button></div></div>}
     {state.type === "create-checklist-template" && <form onSubmit={onSubmit("create_checklist_template")} className="modal-form"><div className="form-grid"><Field label="Template name" name="name" required minLength={2} placeholder="e.g. Standard camera setup" /><Field label="Checklist stage" name="category" as="select" options={phaseOptions(data).map((item) => ({ value: item, label: item }))} defaultValue={phaseOptions(data)[0]} /></div><ChecklistTaskListEditor name="tasks" initialItems={[]} /><div className="modal-help">Saving a template does not assign it. Each quick assignment creates separate tasks for one person and one event.</div><ModalActions onClose={onClose} primary="Save template" /></form>}
@@ -1520,6 +1801,8 @@ function Modal({ state, data, user, context, onClose, openModal, onSubmit, run, 
     {state.type === "edit-checklist-item" && checklistItem && <form onSubmit={onSubmit("update_checklist_item")} className="modal-form"><input type="hidden" name="itemId" value={checklistItem.id} /><div className="context-callout"><ClipboardCheck size={17} /><span><strong>{checklistPerson?.fullName ?? "Team member"}</strong><small>{checklistPerson?.jobTitle ?? checklistPerson?.role ?? "Production role"} · {checklistEvent?.title ?? "Event"}</small></span></div><Field label="Checklist item" name="label" required minLength={2} defaultValue={checklistItem.label} /><Field label="Program phase" name="programPhase" as="select" required options={phaseOptions(data).map((phase) => ({ value: phase, label: phase }))} defaultValue={checklistItem.programPhase ?? phaseOptions(data)[0]} /><CheckboxField name="required" label="Required before the event" checked={checklistItem.required} /><div className="modal-help">Editing the wording or requirement keeps the current completion status. Required incomplete tasks turn urgent when the event moves to a later phase.</div><ModalActions onClose={onClose} primary="Save checklist item" /></form>}
     {state.type === "delete-checklist-item" && checklistItem && <form onSubmit={onSubmit("delete_checklist_item")} className="modal-form"><input type="hidden" name="itemId" value={checklistItem.id} /><div className="context-callout danger-callout"><Trash2 size={17} /><span><strong>{checklistItem.label}</strong><small>{checklistPerson?.fullName ?? "Assigned member"} · {checklistEvent?.title ?? "Event"}</small></span></div><p className="review-copy">This removes the item from the assigned member’s checklist.</p><ModalActions onClose={onClose} primary="Remove checklist item" /></form>}
     {state.type === "invite-member" && <form onSubmit={onSubmit("team_invite")} className="modal-form"><label className="form-field"><span>Start with one of the team positions you gave me</span><select name="teamPreset" defaultValue="" onChange={(event) => { const preset = teamInvitePresets.find((item) => item.id === event.currentTarget.value); const form = event.currentTarget.form; if (!preset || !form) return; (form.elements.namedItem("fullName") as HTMLInputElement).value = preset.fullName; (form.elements.namedItem("username") as HTMLInputElement).value = preset.username; for (const input of form.querySelectorAll<HTMLInputElement>(`input[name="productionRoles"]`)) input.checked = preset.productionRoles.includes(input.value); for (const input of form.querySelectorAll<HTMLInputElement>(`input[name="accessRoles"]`)) input.checked = preset.accessRoles.includes(input.value as AppRole); }}><option value="">Choose a person or enter details below</option>{teamInvitePresets.filter((preset) => actorIsAdministrator || preset.id !== "jaafar").map((preset) => <option value={preset.id} key={preset.id}>{preset.fullName} · {preset.productionRoles.join(" · ")}</option>)}</select></label><div className="form-grid"><Field label="Full name" name="fullName" required placeholder="Team member name" /><Field label="Username" name="username" required placeholder="first.last" />{context.mode === "supabase" && <Field label="Sign-in email" name="email" type="email" required placeholder="name@example.org" />}</div><div className="form-grid"><ProductionRoleFields selected={["Videography"]} /><AccessRoleFields selected={["Videographer"]} includeAdministrator={actorIsAdministrator} /></div><ProfilePhotoField name="avatarUrl" personName="New team member" /><div className="modal-help">{context.mode === "demo" ? "A temporary password is generated and shown once after saving. Share it privately; the admin can reset it any time." : "The person receives a secure password setup email. The administrator can reset their password later."}</div><ModalActions onClose={onClose} primary={context.mode === "demo" ? "Create account" : "Send invitation"} /></form>}
+     {state.type === "edit-member-roles" && member && <form onSubmit={onSubmit("team_update_roles")} className="modal-form"><input type="hidden" name="memberId" value={member.id} /><p>Choose the app permissions for this account. The account login itself stays unchanged.</p><AccessRoleFields selected={member.accessRoles ?? [member.role]} includeAdministrator={actorIsAdministrator} /><div className="modal-help">Directors can manage non-administrator roles. Only an administrator can grant or remove Administrator access.</div><ModalActions onClose={onClose} primary="Save access roles" /></form>}
+     {state.type === "invite-member" && <form onSubmit={onSubmit("team_invite")} className="modal-form"><label className="form-field"><span>Start with one of the team positions you gave me</span><select name="teamPreset" defaultValue="" onChange={(event) => { const preset = teamInvitePresets.find((item) => item.id === event.currentTarget.value); const form = event.currentTarget.form; if (!preset || !form) return; (form.elements.namedItem("fullName") as HTMLInputElement).value = preset.fullName; (form.elements.namedItem("username") as HTMLInputElement).value = preset.username; for (const input of form.querySelectorAll<HTMLInputElement>(`input[name="productionRoles"]`)) input.checked = preset.productionRoles.includes(input.value); for (const input of form.querySelectorAll<HTMLInputElement>(`input[name="accessRoles"]`)) input.checked = preset.accessRoles.includes(input.value as AppRole); }}><option value="">Choose a person or enter details below</option>{teamInvitePresets.filter((preset) => actorIsAdministrator || preset.id !== "jaafar").map((preset) => <option value={preset.id} key={preset.id}>{preset.fullName} · {preset.productionRoles.join(" · ")}</option>)}</select></label><div className="form-grid"><Field label="Full name" name="fullName" required placeholder="Team member name" /><Field label="Username" name="username" required placeholder="first.last" />{context.mode === "supabase" && <Field label="Sign-in email" name="email" type="email" required placeholder="name@example.org" />}</div><div className="form-grid"><ProductionRoleFields selected={["Videography"]} /><AccessRoleFields selected={["Videographer"]} includeAdministrator={actorIsAdministrator} /></div><ProfilePhotoField name="avatarUrl" personName="New team member" /><div className="modal-help">{context.mode === "demo" ? "A temporary password is generated and shown once after saving. Share it privately; the admin can reset it any time." : "The person receives a secure password setup email. The administrator can reset their password later."}</div><ModalActions onClose={onClose} primary={context.mode === "demo" ? "Create account" : "Send invitation"} /></form>}
     {state.type === "edit-member" && member && <form onSubmit={onSubmit("team_update_member")} className="modal-form"><input type="hidden" name="memberId" value={member.id} /><div className="form-grid"><Field label="Full name" name="fullName" required defaultValue={member.fullName} /><Field label="Username" name="username" required defaultValue={member.username} />{context.mode === "supabase" && <Field label="Sign-in email" name="email" type="email" required defaultValue={member.email} />}</div><div className="form-grid"><ProductionRoleFields selected={selectedProductionRoles(member.jobTitle)} /><AccessRoleFields selected={member.accessRoles ?? [member.role]} includeAdministrator={actorIsAdministrator} /></div><ProfilePhotoField name="avatarUrl" personName={member.fullName} initialValue={member.avatarUrl} /><CheckboxField name="active" label="Account is active" checked={member.active} /><div className="modal-help">Select every production role this person handles. App access permissions remain separate.</div><div className="modal-help">Only administrators can change administrator accounts or grant administrator access. Directors can manage the other team accounts.</div><ModalActions onClose={onClose} primary="Save account" /></form>}
     {state.type === "set-member-password" && member && <form onSubmit={onSubmit("team_set_password")} className="modal-form"><input type="hidden" name="memberId" value={member.id} /><PasswordField label="New password" name="password" autoComplete="new-password" minLength={4} /><PasswordField label="Confirm new password" name="confirmPassword" autoComplete="new-password" minLength={4} /><div className="modal-help">Use at least 4 characters. The password is stored as a secure hash and cannot be viewed later. Share the new password privately; the member can change it from their profile after signing in.</div><ModalActions onClose={onClose} primary="Set password" /></form>}
     {state.type === "credential-reveal" && <div className="modal-form credential-reveal"><div className="modal-help">This temporary password is shown only now. Save it and give it to the account owner privately. The administrator can set a replacement any time.</div><label className="form-field"><span>Username</span><input readOnly value={state.username ?? ""} /></label><label className="form-field"><span>Temporary password</span><input readOnly value={state.secret ?? ""} /></label><button type="button" className="button button-primary full-button" onClick={(event) => { void navigator.clipboard.writeText(`Username: ${state.username ?? ""}\nTemporary password: ${state.secret ?? ""}`); event.currentTarget.textContent = "Copied login details"; }}>Copy login details</button><div className="modal-actions"><button type="button" className="button button-quiet" onClick={onClose}>Done</button></div></div>}
@@ -1529,12 +1812,14 @@ function Modal({ state, data, user, context, onClose, openModal, onSubmit, run, 
     {state.type === "report-incident" && <form onSubmit={onSubmit("report_incident")} className="modal-form"><div className="form-grid"><Field label="Event (if applicable)" name="eventId" as="select" options={[{ value: "", label: "Not event-specific" }, ...data.events.map((item) => ({ value: item.id, label: `${item.title} · ${displayDate(item.date)}` }))]} /><Field label="Equipment (if applicable)" name="assetId" as="select" options={[{ value: "", label: "No equipment selected" }, ...data.assets.map((item) => ({ value: item.id, label: `${item.assetCode} · ${item.name}` }))]} /><Field label="Issue category" name="category" as="select" required options={data.categories?.incidents?.length ? data.categories.incidents : categoryDefaults.incidents} /><Field label="Severity" name="severity" as="select" required options={["Low", "Medium", "High", "Critical"]} /></div><Field label="What happened?" name="description" as="textarea" required minLength={1} placeholder="Describe the issue and its impact" /><Field label="Immediate action taken" name="immediateAction" as="textarea" placeholder="Steps taken to keep people or equipment safe" /><IncidentPhotosField /><div className="modal-help">Your report and photos are visible to you and the administrator/director. Equipment managers can report equipment damage.</div><ModalActions onClose={onClose} primary="Submit incident" /></form>}
     {state.type === "flag-check" && <form onSubmit={onSubmit("complete_checklist_item")} className="modal-form"><div className="context-callout danger-callout"><AlertTriangle size={17} /><span><strong>{data.checklistItems.find((item) => item.id === state.id)?.label ?? "Required check"}</strong><small>This will keep the event marked as needing attention.</small></span></div><Field label="Describe the failed check" name="note" as="textarea" required minLength={5} placeholder="What failed and who has been notified?" /><ModalActions onClose={onClose} primary="Report issue" /></form>}
     {state.type === "resolve-incident" && <form onSubmit={onSubmit("resolve_incident")} className="modal-form"><div className="context-callout"><CheckCircle2 size={17} /><span><strong>{incident?.category}</strong><small>{incident?.description}</small></span></div><Field label="Action taken to complete the job" name="resolution" as="textarea" required minLength={1} placeholder="What was repaired, replaced, or followed up?" /><ModalActions onClose={onClose} primary="Record resolution" /></form>}{state.type === "complete-own-incident" && incident && <form onSubmit={onSubmit("complete_own_incident")} className="modal-form"><input type="hidden" name="incidentId" value={incident.id} /><div className="context-callout"><CheckCircle2 size={17} /><span><strong>{incident.category}</strong><small>{incident.description}</small></span></div><Field label="What did you do to fix it?" name="resolution" as="textarea" required minLength={1} placeholder="Describe the repair or action that completed this job" /><IncidentPhotosField initialValue={incident.photos ?? []} /><ModalActions onClose={onClose} primary="Mark job completed" /></form>}{state.type === "edit-incident" && incident && <form onSubmit={onSubmit("update_incident")} className="modal-form"><input type="hidden" name="incidentId" value={incident.id} /><div className="form-grid"><Field label="Event (if applicable)" name="eventId" as="select" options={[{ value: "", label: "Not event-specific" }, ...data.events.map((item) => ({ value: item.id, label: `${item.title} · ${displayDate(item.date)}` }))]} defaultValue={incident.eventId ?? ""} /><Field label="Equipment (if applicable)" name="assetId" as="select" options={[{ value: "", label: "No equipment selected" }, ...data.assets.map((item) => ({ value: item.id, label: `${item.assetCode} · ${item.name}` }))]} defaultValue={incident.assetId ?? ""} /><Field label="Issue category" name="category" as="select" required options={[...(data.categories?.incidents?.length ? data.categories.incidents : categoryDefaults.incidents), ...(incident.category && !(data.categories?.incidents ?? categoryDefaults.incidents).includes(incident.category) ? [incident.category] : [])]} defaultValue={incident.category} /><Field label="Severity" name="severity" as="select" required options={["Low", "Medium", "High", "Critical"]} defaultValue={incident.severity} /><Field label="Status" name="status" as="select" required options={["Open", "Acknowledged", "In progress", "Resolved", "Closed"]} defaultValue={incident.status} /></div><Field label="What happened?" name="description" as="textarea" required minLength={1} defaultValue={incident.description} /><Field label="Immediate action taken" name="immediateAction" as="textarea" defaultValue={incident.immediateAction ?? ""} /><IncidentPhotosField initialValue={incident.photos ?? []} /><Field label="Resolution notes" name="resolution" as="textarea" defaultValue={incident.resolution ?? ""} /><div className="modal-help">You can edit this record even after it has been resolved or closed.</div><ModalActions onClose={onClose} primary="Save incident changes" /></form>}
-    {state.type === "create-sop" && <form onSubmit={onSubmit("create_sop")} className="modal-form"><Field label="Procedure title" name="title" required placeholder="e.g. Wireless microphone check" /><Field label="Category" name="category" as="select" options={data.categories?.sops?.length ? data.categories.sops : categoryDefaults.sops} /><Field label="Purpose and scope" name="summary" as="textarea" required minLength={10} placeholder="Explain when to use this procedure and which roles it covers" /><label className="checkbox-field"><input type="checkbox" name="availableToAll" defaultChecked /><span>Available to all team members</span></label><fieldset className="crew-assignment-fieldset"><legend>Assign to specific team members</legend><p>When unselected, this SOP appears only to assigned members unless “Available to all” is checked.</p><div className="crew-assignment-grid">{people.map((person) => <label className="checkbox-field crew-assignment-option" key={person.id}><input type="checkbox" name="assignedUserIds" value={person.id} /><span><strong>{person.fullName}</strong><small>{person.jobTitle || person.role}</small></span></label>)}</div></fieldset><div className="modal-help">New SOPs are saved as drafts. A technical lead must verify IAC-specific details before publication.</div><ModalActions onClose={onClose} primary="Save SOP draft" /></form>}
+    {state.type === "create-sop" && <form onSubmit={onSubmit("save_rich_sop")} className="modal-form rich-sop-form"><div className="form-grid"><Field label="Procedure title" name="title" required placeholder="e.g. Wireless microphone check" /><Field label="Category" name="category" as="select" options={data.categories?.sops?.length ? data.categories.sops : categoryDefaults.sops} /></div><Field label="Purpose and scope" name="purpose" as="textarea" placeholder="Explain when this procedure is used and who it is for" /><RichSopEditor mode={context.mode} initialBlocks={[]} /><label className="checkbox-field"><input type="checkbox" name="availableToAll" defaultChecked /><span>Available to all team members</span></label><fieldset className="crew-assignment-fieldset"><legend>Assign to specific team members</legend><p>When “Available to all” is off, only selected people can see this procedure.</p><div className="crew-assignment-grid">{people.map((person) => <label className="checkbox-field crew-assignment-option" key={person.id}><input type="checkbox" name="assignedUserIds" value={person.id} /><span><strong>{person.fullName}</strong><small>{person.jobTitle || person.role}</small></span></label>)}</div></fieldset><div className="modal-help">Saved as a draft. A technical lead must verify local instructions before publishing.</div><ModalActions onClose={onClose} primary="Save SOP draft" /></form>}
+    {state.type === "edit-sop" && sop && <form onSubmit={onSubmit("save_rich_sop")} className="modal-form rich-sop-form"><input type="hidden" name="sopId" value={sop.id} /><div className="form-grid"><Field label="Procedure title" name="title" required defaultValue={sop.title} /><Field label="Category" name="category" as="select" options={[...(data.categories?.sops?.length ? data.categories.sops : categoryDefaults.sops), ...(data.categories?.sops?.includes(sop.category) ? [] : [sop.category])]} defaultValue={sop.category} /></div><Field label="Purpose and scope" name="purpose" as="textarea" defaultValue={sop.summary} /><RichSopEditor key={sop.id} mode={context.mode} sopId={sop.id} initialBlocks={defaultSopContent(sop)} /><label className="checkbox-field"><input type="checkbox" name="availableToAll" defaultChecked={sop.availableToAll !== false} /><span>Available to all team members</span></label><fieldset className="crew-assignment-fieldset"><legend>Assign to specific team members</legend><div className="crew-assignment-grid">{people.map((person) => <label className="checkbox-field crew-assignment-option" key={person.id}><input type="checkbox" name="assignedUserIds" value={person.id} defaultChecked={sop.assignedUserIds?.includes(person.id) ?? false} /><span><strong>{person.fullName}</strong><small>{person.jobTitle || person.role}</small></span></label>)}</div></fieldset><div className="modal-help">Saving creates a new draft version. Existing versions remain in the SOP history for review.</div><ModalActions onClose={onClose} primary="Save new draft version" /></form>}
     {state.type === "edit-sop-audience" && sop && <form onSubmit={onSubmit("update_sop_audience")} className="modal-form"><input type="hidden" name="sopId" value={sop.id} /><label className="checkbox-field"><input type="checkbox" name="availableToAll" defaultChecked={sop.availableToAll !== false} /><span>Show this SOP to every crew member</span></label><fieldset className="crew-assignment-fieldset"><legend>Show to selected team members</legend><p>When “Show to every crew member” is off, only selected members can see it.</p><div className="crew-assignment-grid">{people.map((person) => <label className="checkbox-field crew-assignment-option" key={person.id}><input type="checkbox" name="assignedUserIds" value={person.id} defaultChecked={sop.assignedUserIds?.includes(person.id) ?? false} /><span><strong>{person.fullName}</strong><small>{person.jobTitle || person.role}</small></span></label>)}</div></fieldset><ModalActions onClose={onClose} primary="Save SOP visibility" /></form>}
     {state.type === "publish-sop" && <form onSubmit={onSubmit("publish_sop")} className="modal-form"><div className="context-callout"><BookOpen size={17} /><span><strong>{sop?.title}</strong><small>Version {sop?.version} · {sop?.category}</small></span></div><p className="review-copy">Confirm that an authorized IAC technical lead reviewed the procedure and that all equipment-specific details are accurate.</p><CheckboxField name="reviewConfirmed" label="Technical lead review is complete and details are verified" required /><ModalActions onClose={onClose} primary="Publish procedure" /></form>}
     {state.type === "return-equipment" && <form onSubmit={onSubmit("return_equipment")} className="modal-form"><div className="context-callout"><ArrowDownToLine size={17} /><span><strong>Inspect before completing return</strong><small>{loanAsset?.name ?? "Equipment"} · {loan?.quantity ?? 1} unit{(loan?.quantity ?? 1) === 1 ? "" : "s"} · borrowed by {loanBorrower?.fullName ?? "team member"}</small></span></div><Field label="Return condition" name="condition" as="select" required options={["Good", "Needs service", "Damaged"]} /><Field label="Inspection notes" name="notes" as="textarea" placeholder="Record visible damage, missing accessories, or maintenance needs" /><div className="modal-help">Recording the return closes this person’s loan and updates the equipment’s availability.</div><ModalActions onClose={onClose} primary="Record return" /></form>}
-    {state.type === "read-sop" && sop && <div className="sop-detail"><div className="sop-detail-meta"><StatusPill tone={sop.status === "Published" ? "success" : "warning"}>{sop.status}</StatusPill><span>{sop.category} · v{sop.version}</span>{sop.reviewRequired && <span className="danger-text">Requires IAC technical review</span>}</div><p className="sop-purpose">{sop.summary}</p><ol>{sop.steps.map((step, index) => <li key={`${sop.id}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span>{step}</li>)}</ol>{sop.reviewRequired && <div className="sop-review-warning"><AlertTriangle size={16} />This is an unverified development template. Do not follow equipment-specific steps until a technical lead approves it.</div>}{sop.status === "Draft" && can(user.accessRoles ?? user.role, "manage_sops") && <button className="button button-primary sop-publish-button" onClick={() => openModal({ type: "publish-sop", id: sop.id })}>Review & publish</button>}</div>}
-    {state.type === "show-event" && event && <div className="event-modal-content"><div className="event-modal-date"><CalendarDays size={16} />{displayDate(event.date)} · {displayTime(event.startTime)}–{displayTime(event.endTime)}</div><div className="event-phase-modal"><span><small>CURRENT PROGRAM PHASE</small><strong><Clock3 size={14} />{event.programPhase ?? phaseOptions(data)[0]}</strong></span>{can(user.accessRoles ?? user.role, "manage_events") && <div className="program-phase-picker-field modal-program-phase-picker"><span>Change phase</span><ProgramPhaseButtons data={data} event={event} onSelect={(phase) => void run("set_event_program_phase", { eventId: event.id, programPhase: phase })} /><small>Required incomplete tasks from earlier phases are marked urgent.</small></div>}</div><div className="event-details-grid"><span><small>VENUE</small><strong>{event.venue}</strong></span><span><small>SETUP / ARRIVAL</small><strong>{displayTime(event.setupTime)}</strong></span><span><small>CATEGORY</small><strong>{event.category}</strong></span></div><div className="event-modal-crew"><small>CREW ATTENDANCE · {eventCrew.filter((assignment) => assignment.response === "Accepted").length} attending · {eventCrew.filter((assignment) => assignment.response === "Declined").length} not attending · {eventCrew.filter((assignment) => assignment.response === "Pending").length} awaiting</small>{eventCrew.length ? <div className="event-crew-list">{eventCrew.map((assignment) => { const person = data.profiles.find((item) => item.id === assignment.userId); return <div className="event-crew-line" key={assignment.id}><span>{person?.fullName ?? assignment.roleName}<small>{assignment.roleName}</small></span>{<StatusPill tone={assignment.response === "Accepted" ? "success" : assignment.response === "Declined" ? "danger" : "warning"}>{assignment.response === "Accepted" ? "Attending" : assignment.response === "Declined" ? "Not attending" : "No response"}</StatusPill>}</div>; })}</div> : <div className="subtle-empty">No crew assigned.</div>}</div><p>{event.description}</p>{event.publicInfo && <div className="public-note">{event.publicInfo}</div>}{event.privateNotes && isStaff(user.role) && <div className="private-note"><ShieldCheck size={15} /><span><small>INTERNAL NOTE</small>{event.privateNotes}</span></div>}{event.status === "Published" && eventAssignment && <div className="rsvp-actions"><span>{eventAssignment.response === "Accepted" ? "You’re attending" : eventAssignment.response === "Declined" ? "You can’t attend" : "Can you attend?"}</span><button className="button button-small button-primary" onClick={() => void run("set_event_response", { assignmentId: eventAssignment.id, response: "Accepted" })}>I can attend</button><button className="button button-small button-quiet" onClick={() => void run("set_event_response", { assignmentId: eventAssignment.id, response: "Declined" })}>I can’t attend</button></div>}</div>}
+    {state.type === "read-sop" && sop && <div className="sop-detail"><div className="sop-detail-meta"><StatusPill tone={sop.status === "Published" ? "success" : "warning"}>{sop.status}</StatusPill><span>{sop.category} · v{sop.version}</span>{sop.reviewRequired && <span className="danger-text">Requires IAC technical review</span>}</div>{sop.summary && <p className="sop-purpose">{sop.summary}</p>}<SopRichContentView sop={sop} />{sop.reviewRequired && <div className="sop-review-warning"><AlertTriangle size={16} />This draft requires local technical review before it can be used as an approved procedure.</div>}{hasManagerAccess(user.accessRoles, user.role) && <div className="sop-reader-actions"><button type="button" className="button button-quiet" onClick={() => openModal({ type: "edit-sop", id: sop.id })}>Edit SOP</button>{sop.status === "Draft" && <button type="button" className="button button-primary sop-publish-button" onClick={() => openModal({ type: "publish-sop", id: sop.id })}>Review & publish</button>}</div>}</div>}
+    {state.type === "event-report" && event && hasManagerAccess(user.accessRoles, user.role) && <div className="event-report-content"><div className="event-report-toolbar"><span>Generated {formatStamp(new Date().toISOString())}</span><button type="button" className="button button-primary" onClick={() => window.print()}><FileText size={15} />Print / save PDF</button></div><div className="event-report-summary"><div><small>EVENT</small><strong>{event.title}</strong></div><div><small>DATE & VENUE</small><strong>{displayDate(event.date)} · {event.venue}</strong></div><div><small>PROGRAM START</small><strong>{event.startedAt ? formatStamp(event.startedAt) : "Not started"}</strong></div><div><small>PROGRAM END</small><strong>{event.endedAt ? formatStamp(event.endedAt) : "Not ended"}</strong></div></div><section className="event-report-section"><h3>Attendance · {eventCrew.filter((item) => item.response === "Accepted").length} confirmed of {eventCrew.length} assigned</h3>{eventCrew.length ? <div className="event-report-list">{eventCrew.map((assignment) => { const person = data.profiles.find((item) => item.id === assignment.userId); return <div key={assignment.id}><span><strong>{person?.fullName ?? "Team member"}</strong><small>{assignment.roleName}</small></span><StatusPill tone={assignment.response === "Accepted" ? "success" : assignment.response === "Declined" ? "danger" : "warning"}>{assignment.response === "Accepted" ? "Attending" : assignment.response === "Declined" ? "Not attending" : "Awaiting"}</StatusPill></div>; })}</div> : <p>No crew assigned.</p>}</section><section className="event-report-section"><h3>Checklist · {eventChecklistItems.filter((item) => item.status === "Complete").length} of {eventChecklistItems.length} complete</h3>{eventChecklistItems.length ? <div className="event-report-list">{eventChecklistItems.map((item) => <div key={item.id}><span><strong>{item.label}</strong><small>{data.profiles.find((person) => person.id === item.userId)?.fullName ?? "Team member"}{item.required ? " · Required" : " · Optional"}</small></span><StatusPill tone={item.status === "Complete" ? "success" : item.status === "Needs attention" ? "danger" : "warning"}>{item.status}</StatusPill></div>)}</div> : <p>No checklist tasks assigned.</p>}</section><section className="event-report-section"><h3>Incident reports · {eventIncidents.length}</h3>{eventIncidents.length ? <div className="event-report-list">{eventIncidents.map((incident) => <div key={incident.id}><span><strong>{incident.category} · {incident.severity}</strong><small>{data.profiles.find((person) => person.id === incident.reportedBy)?.fullName ?? "Team member"} · {formatStamp(incident.createdAt)} · {incident.description}</small>{incident.resolution && <small>Resolution: {incident.resolution}</small>}</span><StatusPill tone={incident.status === "Resolved" || incident.status === "Closed" ? "success" : "warning"}>{incident.status}</StatusPill></div>)}</div> : <p>No event-linked incidents were reported.</p>}</section><section className="event-report-section"><h3>Chronological program activity · {eventTimeline.length}</h3>{eventTimeline.length ? <ol className="event-report-timeline">{eventTimeline.map((item) => <li key={item.id}><time>{formatStamp(item.occurredAt)}</time><span><strong>{data.profiles.find((person) => person.id === item.actorId)?.fullName ?? "Team member"}</strong><small>{item.summary}</small></span></li>)}</ol> : <p>Activity will appear here while the program is running. This includes roster, checklist, incident, and equipment handoff changes.</p>}</section><p className="event-report-footnote">This report includes activity recorded by the app while the program was running. Equipment actions without an event context stay in the equipment history.</p></div>}
+    {state.type === "show-event" && event && <div className="event-modal-content"><div className="event-modal-date"><CalendarDays size={16} />{displayDate(event.date)} · {displayTime(event.startTime)}–{displayTime(event.endTime)}</div><div className="event-phase-modal"><span><small>CURRENT PROGRAM PHASE</small><strong><Clock3 size={14} />{event.programPhase ?? phaseOptions(data)[0]}</strong></span>{can(user.accessRoles ?? user.role, "manage_events") && <div className="program-phase-picker-field modal-program-phase-picker"><span>Change phase</span><ProgramPhaseButtons data={data} event={event} onSelect={(phase) => void run("set_event_program_phase", { eventId: event.id, programPhase: phase })} /><small>Required incomplete tasks from earlier phases are marked urgent.</small></div>}</div><div className="event-details-grid"><span><small>VENUE</small><strong>{event.venue}</strong></span><span><small>SETUP / ARRIVAL</small><strong>{displayTime(event.setupTime)}</strong></span><span><small>CATEGORY</small><strong>{event.category}</strong></span><span><small>PROGRAM START</small><strong>{event.startedAt ? formatStamp(event.startedAt) : "Not started"}</strong></span><span><small>PROGRAM END</small><strong>{event.endedAt ? formatStamp(event.endedAt) : "Not ended"}</strong></span></div><div className="event-modal-crew"><small>CREW ATTENDANCE · {eventCrew.filter((assignment) => assignment.response === "Accepted").length} attending · {eventCrew.filter((assignment) => assignment.response === "Declined").length} not attending · {eventCrew.filter((assignment) => assignment.response === "Pending").length} awaiting</small>{eventCrew.length ? <div className="event-crew-list">{eventCrew.map((assignment) => { const person = data.profiles.find((item) => item.id === assignment.userId); return <div className="event-crew-line" key={assignment.id}><span>{person?.fullName ?? assignment.roleName}<small>{assignment.roleName}</small></span>{<StatusPill tone={assignment.response === "Accepted" ? "success" : assignment.response === "Declined" ? "danger" : "warning"}>{assignment.response === "Accepted" ? "Attending" : assignment.response === "Declined" ? "Not attending" : "No response"}</StatusPill>}</div>; })}</div> : <div className="subtle-empty">No crew assigned.</div>}</div><p>{event.description}</p>{event.publicInfo && <div className="public-note">{event.publicInfo}</div>}{event.privateNotes && isStaff(user.role) && <div className="private-note"><ShieldCheck size={15} /><span><small>INTERNAL NOTE</small>{event.privateNotes}</span></div>}{event.status === "Published" && eventAssignment && <div className="rsvp-actions"><span>{eventAssignment.response === "Accepted" ? "You’re attending" : eventAssignment.response === "Declined" ? "You can’t attend" : "Can you attend?"}</span><div className="rsvp-buttons"><button className="button button-small button-primary" onClick={() => void run("set_event_response", { assignmentId: eventAssignment.id, response: "Accepted" })}>I can attend</button><button className="button button-small button-quiet" onClick={() => void run("set_event_response", { assignmentId: eventAssignment.id, response: "Declined" })}>I can’t attend</button></div></div>}{hasManagerAccess(user.accessRoles, user.role) && <div className="event-management-actions modal-event-actions">{can(user.accessRoles ?? user.role, "manage_events") && event.status === "Published" && !event.startedAt && <button type="button" className="button button-small button-primary" onClick={() => void run("start_event_program", { eventId: event.id })}>Start program</button>}{can(user.accessRoles ?? user.role, "manage_events") && event.status === "Published" && event.startedAt && !event.endedAt && <button type="button" className="button button-small button-danger" onClick={() => { if (window.confirm(`End the program “${event.title}” and notify its crew?`)) void run("end_event_program", { eventId: event.id }); }}>End program</button>}<button type="button" className="button button-small button-quiet" onClick={() => openModal({ type: "event-report", id: event.id })}>Event report</button></div>}</div>}
   </section></div>;
 }
 

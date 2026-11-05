@@ -64,6 +64,11 @@ const timeAlarmSchema = z.object({
 });
 const timeAlarmIdSchema = z.object({ alarmId: z.string().min(1) });
 const sopAudienceSchema = z.object({ sopId: z.string().min(1), assignedUserIds: z.array(z.string().min(1)).max(100), availableToAll: z.boolean() });
+const sopContentBlockSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.enum(["title", "heading", "subheading", "body"]), text: z.string().trim().min(1).max(4000), fontSize: z.number().int().min(10).max(48).default(16) }),
+  z.object({ kind: z.literal("image"), path: z.string().max(500).optional(), dataUrl: z.string().startsWith("data:image/").max(3_000_000).optional(), alt: z.string().max(240).default("") }).refine((value) => Boolean(value.path) !== Boolean(value.dataUrl), "Each SOP image needs one uploaded photo."),
+]);
+const richSopSchema = z.object({ sopId: z.string().uuid().optional(), title: z.string().trim().min(3).max(120), category: z.string().trim().min(1).max(80), purpose: z.string().trim().max(2000).default(""), content: z.array(sopContentBlockSchema).min(1).max(200), assignedUserIds: z.array(z.string().min(1)).max(100).default([]), availableToAll: z.boolean().default(true) });
 const defaultCategories: NonNullable<AppData["categories"]> = { equipment: ["Camera", "Audio", "Wiring", "Video", "Lighting", "Other"], sops: ["Production", "Audio", "Video", "Livestream & recording", "Equipment", "Operations", "Safety"], incidents: ["Equipment damage", "Audio issue", "Video issue", "Stream interruption", "Recording issue", "Network", "Other"], checklists: [...CHECKLIST_PROGRAM_PHASES], events: ["Happy", "Sad", "General"] };
 function checklistPhases(data: AppData) { return orderChecklistProgramPhases(data.categories?.checklists); }
 function validateChecklistPhase(data: AppData, phase: string) {
@@ -132,6 +137,16 @@ function audit(data: AppData, actorId: string, action: string, target: string, t
 function addNotification(data: AppData, userId: string, title: string, detail: string, href: string, senderId?: string) {
   data.notifications.unshift({ id: id(), userId, senderId, title, detail, date: now(), read: false, href });
 }
+function logEventActivity(data: AppData, eventId: string, actorId: string, action: string, summary: string) {
+  data.eventActivity ??= [];
+  data.eventActivity.unshift({ id: id(), eventId, actorId, action, summary, occurredAt: now() });
+}
+function logRunningProgramActivity(data: AppData, actorId: string, action: string, summary: string, eventId?: string) {
+  const running = eventId
+    ? data.events.find((event) => event.id === eventId && event.startedAt && !event.endedAt)
+    : data.events.filter((event) => event.startedAt && !event.endedAt).sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))[0];
+  if (running) logEventActivity(data, running.id, actorId, action, summary);
+}
 function notifyEquipmentCrew(data: AppData, actorId: string, detail: string, excludedUserId?: string) {
   for (const profile of data.profiles) {
     if (profile.id !== actorId && profile.id !== excludedUserId && profile.active !== false && (hasManagerAccess(profile.accessRoles, profile.role) || hasAccessRole(profile.accessRoles, profile.role, "Equipment Manager"))) addNotification(data, profile.id, "Equipment updated", detail, "equipment", actorId);
@@ -172,14 +187,21 @@ function updateEventCrew(data: AppData, event: MediaEvent, memberIds: string[], 
     if (!person) continue;
     const assignment = existingByMember.get(memberId);
     if (assignment) {
-      assignment.roleName = person.jobTitle || person.role;
+      const roleName = person.jobTitle || person.role;
+      if (assignment.roleName !== roleName) logRunningProgramActivity(data, actorId, "crew assignment", `Changed ${person.fullName} role to ${roleName}`, event.id);
+      assignment.roleName = roleName;
       assignment.arrivalTime = event.setupTime || undefined;
       continue;
     }
     data.assignments.push({ id: id(), eventId: event.id, userId: memberId, roleName: person.jobTitle || person.role, arrivalTime: event.setupTime || undefined, instructions: "", response: "Pending" });
+    logRunningProgramActivity(data, actorId, "crew assignment", `Assigned ${person.fullName} · ${person.jobTitle || person.role}`, event.id);
     if (memberId !== actorId) addNotification(data, memberId, "New event assignment", `${event.title} · ${displayDateSafe(event.date)}`, "events", actorId);
   }
-  for (const assignment of existing) if (!selected.has(assignment.userId) && assignment.userId !== actorId) addNotification(data, assignment.userId, "Event assignment updated", `You are no longer assigned to ${event.title}.`, "events", actorId);
+  for (const assignment of existing) if (!selected.has(assignment.userId)) {
+    const person = activeMembers.get(assignment.userId);
+    logRunningProgramActivity(data, actorId, "crew assignment", `Removed ${person?.fullName ?? "team member"} from the crew`, event.id);
+    if (assignment.userId !== actorId) addNotification(data, assignment.userId, "Event assignment updated", `You are no longer assigned to ${event.title}.`, "events", actorId);
+  }
 }
 
 function normalizeTemplateTasks(tasks: Array<z.infer<typeof checklistTemplateTaskSchema>>): ChecklistTemplateTask[] {
@@ -216,6 +238,17 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         if (!alarm.triggeredAt) alarm.cancelledAt = now();
         audit(data, user.id, "Cancelled time alarm", "time_alarm", alarm.id);
         return { ok: true };
+      }
+      case "admin_clear_active_time_alarms": {
+        if (!hasAccessRole(user.accessRoles, user.role, "Administrator")) throw new AppError("Only an administrator can clear all team alarms.", 403);
+        const active = (data.timeAlarms ?? []).filter((alarm) => !alarm.cancelledAt && !alarm.completedAt);
+        for (const alarm of active) {
+          alarm.cancelledAt = now();
+          const notice = data.notifications.find((item) => item.userId === alarm.userId && item.href === `time-alarm:${alarm.id}`);
+          if (notice) { notice.read = true; notice.readAt = now(); }
+        }
+        audit(data, user.id, "Cleared active team alarms", "time_alarm", "all");
+        return { ok: true, count: active.length };
       }
       case "complete_time_alarm": {
         const values = record(timeAlarmIdSchema, p);
@@ -319,6 +352,26 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         audit(data, user.id, "Published schedule", "event", event.id);
         return { ok: true };
       }
+      case "start_event_program":
+      case "end_event_program": {
+        if (!hasManagerAccess(user.accessRoles, user.role)) throw new AppError("Only the administrator or director can start or end a program.", 403);
+        const event = data.events.find((row) => row.id === String(p.eventId ?? ""));
+        if (!event || event.status !== "Published") throw new AppError("Only a published program can be started or ended.", 404);
+        if (action === "start_event_program") {
+          if (event.startedAt) throw new AppError("This program has already started.", 409);
+          event.startedAt = now(); event.endedAt = undefined;
+          logEventActivity(data, event.id, user.id, "program started", "Program started");
+          for (const assigned of new Set(data.assignments.filter((item) => item.eventId === event.id).map((item) => item.userId))) if (assigned !== user.id) notify(data, assigned, "Program started", `${event.title} has started.`, "events");
+          audit(data, user.id, "Started program", "event", event.id);
+          return { ok: true, timestamp: event.startedAt };
+        }
+        if (!event.startedAt || event.endedAt) throw new AppError("Only a running program can be ended.", 409);
+        event.endedAt = now(); event.status = "Completed";
+        logEventActivity(data, event.id, user.id, "program ended", "Program ended");
+        for (const assigned of new Set(data.assignments.filter((item) => item.eventId === event.id).map((item) => item.userId))) if (assigned !== user.id) notify(data, assigned, "Program ended", `${event.title} has ended.`, "events");
+        audit(data, user.id, "Ended program", "event", event.id);
+        return { ok: true, timestamp: event.endedAt };
+      }
       case "delete_event": {
         if (!hasManagerAccess(user.accessRoles, user.role)) throw new AppError("Only the administrator or director can delete events.", 403);
         const { eventId } = record(deleteEventSchema, p);
@@ -366,6 +419,7 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         item.status = status as ChecklistItem["status"];
         item.note = note || (status === "Complete" ? item.note : undefined);
         item.completedAt = status === "Outstanding" ? undefined : now();
+        logRunningProgramActivity(data, user.id, "checklist", `${status === "Complete" ? "Completed" : "Updated"} checklist task: ${item.label}`, item.eventId);
         audit(data, user.id, status === "Needs attention" ? "Flagged checklist item" : "Updated checklist item", "checklist_item", item.id);
         return { ok: true };
       }
@@ -380,6 +434,7 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         validateChecklistPhase(data, programPhase);
         const item: ChecklistItem = { id: id(), eventId: event.id, userId: profile.id, label: values.label, required: values.required, status: "Outstanding", programPhase };
         data.checklistItems.push(item);
+        logRunningProgramActivity(data, user.id, "checklist", `Assigned checklist task: ${item.label}`, event.id);
         notify(data, profile.id, "New checklist item", `${event.title} · ${values.label}`, "checklists");
         audit(data, user.id, "Added checklist item", "checklist_item", item.id);
         return { ok: true, id: item.id };
@@ -395,6 +450,7 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
           if (values.programPhase !== item.programPhase) validateChecklistPhase(data, values.programPhase);
           item.programPhase = values.programPhase;
         }
+        logRunningProgramActivity(data, user.id, "checklist", `Updated checklist task: ${item.label}`, item.eventId);
         notify(data, item.userId, "Checklist item updated", item.label, "checklists");
         audit(data, user.id, "Edited checklist item", "checklist_item", item.id);
         return { ok: true };
@@ -585,6 +641,7 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
           return loan;
         });
         const summary = checkoutItems.map(({ asset, quantity }) => `${quantity} × ${asset.name}`).join(", ");
+        logRunningProgramActivity(data, user.id, "equipment checkout", `Checked out to ${borrower.fullName}: ${summary}`);
         notify(data, borrower.id, "Equipment handed to you", `${template.name} · ${summary} · recorded by the checkout crew`, "equipment");
         notifyEquipmentCrew(data, user.id, `${template.name} was handed to ${borrower.fullName} · ${summary}.`, borrower.id);
         audit(data, user.id, `Assigned equipment template ${template.name} to ${borrower.fullName}`, "equipment_template_assignment", template.id);
@@ -672,6 +729,7 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         asset.status = remainingQuantity === 0 ? "Checked out" : "Available";
         const activeBorrowers = new Set([borrower.id, ...activeAssetLoans.map((item) => item.borrowerId)]);
         asset.currentCustodianId = activeBorrowers.size === 1 ? borrower.id : undefined;
+        logRunningProgramActivity(data, user.id, "equipment checkout", `Checked out to ${borrower.fullName}: ${values.quantity} × ${asset.name}`);
         notify(data, borrower.id, "Equipment handed to you", `${values.quantity} × ${asset.name} · recorded by the checkout crew`, "equipment");
         notifyEquipmentCrew(data, user.id, `${values.quantity} × ${asset.name} was handed to ${borrower.fullName}.`);
         audit(data, user.id, `Handed equipment to ${borrower.fullName}`, "equipment_loan", loan.id);
@@ -694,6 +752,7 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         asset.status = values.condition !== "Good" ? "Under maintenance" : remainingBorrowedQuantity >= (asset.quantity ?? 1) ? "Checked out" : "Available";
         asset.currentCustodianId = new Set(remainingLoans.map((item) => item.borrowerId)).size === 1 ? remainingLoans[0]?.borrowerId : undefined;
         const borrower = data.profiles.find((profile) => profile.id === loan.borrowerId);
+        logRunningProgramActivity(data, user.id, "equipment return", `Returned by ${borrower?.fullName ?? "team member"}: ${asset.name} · ${values.condition}`);
         if (borrower && borrower.id !== user.id) notify(data, borrower.id, "Equipment return recorded", `${asset.name} · ${values.condition}`, "equipment");
         notifyEquipmentCrew(data, user.id, `${asset.name} was returned · ${values.condition}.`);
         audit(data, user.id, "Returned equipment", "equipment_loan", loan.id);
@@ -711,6 +770,7 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         }
         const incident: Incident = { id: id(), ...values, immediateAction: values.immediateAction || undefined, photos: values.photos, reportedBy: user.id, status: "Open", createdAt: now() };
         data.incidents.unshift(incident);
+        logRunningProgramActivity(data, user.id, "incident", `Incident reported: ${incident.category} · ${incident.severity}`, incident.eventId);
         if (incident.assetId && (["High", "Critical"].includes(incident.severity) || incident.category.toLocaleLowerCase().includes("damage"))) {
           const asset = data.assets.find((row) => row.id === incident.assetId);
           if (asset) {
@@ -732,6 +792,7 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         if (resolution.length < 1) throw new AppError("Add a resolution note before closing the incident.");
         incident.status = "Resolved";
         incident.resolution = resolution;
+        logRunningProgramActivity(data, user.id, "incident update", `Incident resolved: ${incident.category}`, incident.eventId);
         audit(data, user.id, "Resolved incident", "incident", incident.id);
         return { ok: true };
       }
@@ -743,6 +804,7 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         incident.status = "Resolved";
         incident.resolution = resolution;
         incident.photos = values.photos;
+        logRunningProgramActivity(data, user.id, "incident update", `Incident job completed: ${incident.category}`, incident.eventId);
         audit(data, user.id, "Completed own incident job", "incident", incident.id);
         return { ok: true };
       }
@@ -756,6 +818,7 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         const resolution = values.resolution || incident.resolution || "";
         if (["Resolved", "Closed"].includes(values.status) && resolution.trim().length < 1) throw new AppError("Add a resolution note before keeping this incident resolved or closed.");
         Object.assign(incident, { eventId: values.eventId, assetId: values.assetId, category: values.category, severity: values.severity, description: values.description, immediateAction: values.immediateAction || undefined, photos: values.photos, status: values.status, resolution: resolution || undefined });
+        logRunningProgramActivity(data, user.id, "incident update", `Incident updated: ${incident.category} · ${incident.status}`, incident.eventId);
         audit(data, user.id, "Edited incident record", "incident", incident.id);
         return { ok: true };
       }
@@ -779,6 +842,31 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         data.sops.unshift(sop);
         audit(data, user.id, "Created SOP draft", "sop", sop.id);
         return { ok: true, id: sop.id };
+      }
+      case "save_rich_sop": {
+        if (!hasManagerAccess(user.accessRoles, user.role)) throw new AppError("Only an administrator or director can edit SOPs.", 403);
+        const values = record(richSopSchema, p);
+        const existing = values.sopId ? data.sops.find((item) => item.id === values.sopId) : undefined;
+        if (values.sopId && !existing) throw new AppError("SOP not found.", 404);
+        if (values.content.some((block) => block.kind === "image" && !block.dataUrl)) throw new AppError("In demo mode, choose the image again before saving.");
+        const textBlocks = values.content.filter((block) => block.kind !== "image");
+        if (!textBlocks.length) throw new AppError("Add at least one text instruction.");
+        if (existing) {
+          existing.title = values.title; existing.category = values.category; existing.summary = values.purpose;
+          existing.contentBlocks = values.content as AppData["sops"][number]["contentBlocks"];
+          existing.assignedUserIds = values.assignedUserIds; existing.availableToAll = values.availableToAll;
+          existing.steps = textBlocks.map((block) => block.text); existing.status = "Draft"; existing.reviewRequired = true; existing.version += 1; existing.updatedAt = now();
+          audit(data, user.id, "Edited SOP draft", "sop", existing.id);
+          return { ok: true, id: existing.id };
+        }
+        const sop = { id: id(), title: values.title, category: values.category, status: "Draft" as const, version: 1, summary: values.purpose, steps: textBlocks.map((block) => block.text), contentBlocks: values.content as AppData["sops"][number]["contentBlocks"], reviewRequired: true, updatedAt: now(), assignedUserIds: values.assignedUserIds, availableToAll: values.availableToAll };
+        data.sops.unshift(sop); audit(data, user.id, "Created SOP draft", "sop", sop.id); return { ok: true, id: sop.id };
+      }
+      case "delete_sop": {
+        if (!hasManagerAccess(user.accessRoles, user.role)) throw new AppError("Only an administrator or director can delete SOPs.", 403);
+        const index = data.sops.findIndex((item) => item.id === String(p.sopId ?? ""));
+        if (index < 0) throw new AppError("SOP not found.", 404);
+        const [removed] = data.sops.splice(index, 1); audit(data, user.id, "Deleted SOP", "sop", removed.id); return { ok: true };
       }
       case "update_sop_audience": {
         requireCapability(user.accessRoles ?? user.role, "manage_sops");
@@ -861,6 +949,11 @@ async function runSupabase(action: string, payload: Record<string, unknown>, use
       if (!data) throw new AppError("Alarm not found or you do not have permission to cancel it.", 403);
       return { ok: true };
     }
+    case "admin_clear_active_time_alarms": {
+      if (!hasAccessRole(user.accessRoles, user.role, "Administrator")) throw new AppError("Only an administrator can clear all team alarms.", 403);
+      const { data, error } = await supabase.rpc("admin_clear_active_time_alarms");
+      fail(error); return { ok: true, count: Number(data ?? 0) };
+    }
     case "complete_time_alarm": {
       const values = record(timeAlarmIdSchema, p);
       const { data, error } = await supabase.rpc("complete_time_alarm", { p_alarm_id: values.alarmId });
@@ -926,6 +1019,12 @@ async function runSupabase(action: string, payload: Record<string, unknown>, use
     case "publish_event": {
       requireCapability(user.accessRoles ?? user.role, "manage_events");
       const { error } = await supabase.rpc("publish_event_schedule", { p_event_id: String(p.eventId) }); fail(error); return { ok: true };
+    }
+    case "start_event_program":
+    case "end_event_program": {
+      if (!hasManagerAccess(user.accessRoles, user.role)) throw new AppError("Only the administrator or director can start or end a program.", 403);
+      const { data, error } = await supabase.rpc(action, { p_event_id: String(p.eventId ?? "") });
+      fail(error); return { ok: true, timestamp: data };
     }
     case "update_event": {
       requireCapability(user.accessRoles ?? user.role, "manage_events");
@@ -1164,6 +1263,30 @@ async function runSupabase(action: string, payload: Record<string, unknown>, use
       fail(error);
       const { error: assignmentError } = await supabase.from("sops").update({ assigned_user_ids: assignedUserIds, available_to_all: availableToAll }).eq("id", data);
       fail(assignmentError); return { ok: true, id: data };
+    }
+    case "save_rich_sop": {
+      if (!hasManagerAccess(user.accessRoles, user.role)) throw new AppError("Only an administrator or director can edit SOPs.", 403);
+      const values = record(richSopSchema, p);
+      const imagePaths = values.content.flatMap((block) => block.kind === "image" && block.path ? [block.path] : []);
+      if (values.content.some((block) => block.kind === "image" && (!block.path || block.dataUrl || !block.path.includes("/sops/")))) throw new AppError("SOP images must be uploaded before saving.", 403);
+      const otherOwnerPaths = imagePaths.filter((path) => !path.startsWith(`${user.id}/sops/`));
+      if (otherOwnerPaths.length) {
+        if (!values.sopId) throw new AppError("New SOP images must be uploaded from this account.", 403);
+        const { data: currentSop, error: currentSopError } = await supabase.from("sops").select("photos").eq("id", values.sopId).maybeSingle();
+        fail(currentSopError);
+        if (!currentSop || otherOwnerPaths.some((path) => !(currentSop.photos ?? []).includes(path))) throw new AppError("SOP images must be uploaded by your account or already belong to this SOP.", 403);
+      }
+      if (!values.content.some((block) => block.kind !== "image")) throw new AppError("Add at least one text instruction.");
+      const { data, error } = await supabase.rpc("save_rich_sop_draft", { p_sop_id: values.sopId ?? null, p_title: values.title, p_category: values.category, p_purpose: values.purpose, p_content: values.content });
+      fail(error);
+      const { error: audienceError } = await supabase.from("sops").update({ assigned_user_ids: values.assignedUserIds, available_to_all: values.availableToAll }).eq("id", data);
+      fail(audienceError); return { ok: true, id: data };
+    }
+    case "delete_sop": {
+      if (!hasManagerAccess(user.accessRoles, user.role)) throw new AppError("Only an administrator or director can delete SOPs.", 403);
+      const { sopId } = z.object({ sopId: z.string().uuid() }).parse(p);
+      const { error } = await supabase.rpc("delete_sop", { p_sop_id: sopId });
+      fail(error); return { ok: true };
     }
     case "update_sop_audience": {
       requireCapability(user.accessRoles ?? user.role, "manage_sops");
