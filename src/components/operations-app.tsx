@@ -950,7 +950,11 @@ function TimePage({ data, user, run }: { data: AppData; user: Profile; run: (act
 
 type ChatMember = Pick<Profile, "id" | "fullName" | "avatarUrl" | "role" | "jobTitle">;
 function chatFileUrl(path: string) { return `/api/chat/media?path=${encodeURIComponent(path)}`; }
-function ChatAttachmentPreview({ attachment }: { attachment: ChatAttachment }) {
+function isChatImageAttachment(name: string, path: string, type: string) {
+  const imageFileName = /\.(?:jpe?g|png|webp|gif)$/i;
+  return type.startsWith("image/") || imageFileName.test(name) || imageFileName.test(path);
+}
+function ChatAttachmentPreview({ attachment, onOpenImage }: { attachment: ChatAttachment; onOpenImage: (src: string, name: string) => void }) {
   if (!attachment || typeof attachment !== "object") return null;
   const type = typeof attachment.type === "string" ? attachment.type.toLowerCase() : "";
   const name = typeof attachment.name === "string" && attachment.name.trim() ? attachment.name : "Attached file";
@@ -959,7 +963,7 @@ function ChatAttachmentPreview({ attachment }: { attachment: ChatAttachment }) {
   const path = typeof attachment.path === "string" ? attachment.path : "";
   const source = dataUrl || (path ? chatFileUrl(path) : "");
   if (!source) return null;
-  if (type.startsWith("image/")) return <a className="chat-attachment-image-link" href={source} target="_blank" rel="noreferrer"><NextImage unoptimized src={source} alt={name} width={280} height={220} className="chat-attachment-image" /></a>;
+  if (isChatImageAttachment(name, path, type)) return <button type="button" className="chat-attachment-image-button" aria-label={`View ${name} larger`} onClick={() => onOpenImage(source, name)}><NextImage unoptimized src={source} alt={name} width={280} height={220} className="chat-attachment-image" /></button>;
   if (type.startsWith("video/")) return <video className="chat-attachment-video" controls preload="metadata" src={source}>{name}</video>;
   if (type.startsWith("audio/")) return <audio className="chat-attachment-audio" controls preload="metadata" src={source}>{name}</audio>;
   return <a className="chat-attachment-file" href={source} target="_blank" rel="noreferrer"><FileText size={17} /><span><strong>{name}</strong><small>{size ? formatFileSize(size) : "File attachment"}</small></span><ArrowDownToLine size={14} /></a>;
@@ -970,6 +974,7 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
   const [members, setMembers] = useState<ChatMember[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [imagePreview, setImagePreview] = useState<{ src: string; name: string } | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [uploadingFiles, setUploadingFiles] = useState(false);
@@ -978,6 +983,8 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
   const [error, setError] = useState("");
   const sendingRef = useRef(false);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const imagePreviewCloseRef = useRef<HTMLButtonElement>(null);
+  const imagePreviewReturnFocusRef = useRef<HTMLElement | null>(null);
   const shouldScrollToBottom = useRef(true);
   const isAtBottom = useRef(true);
   const knownMessageIds = useRef<Set<string> | null>(null);
@@ -985,6 +992,33 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
   const freshMessageTimer = useRef<number | null>(null);
   const recipient = members.find((member) => member.id === recipientId);
   const replyAuthor = replyTo ? replyTo.senderId === user.id ? "You" : members.find((member) => member.id === replyTo.senderId)?.fullName ?? "Team member" : "";
+
+  const openImagePreview = (src: string, name: string) => {
+    imagePreviewReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setImagePreview({ src, name });
+  };
+
+  useEffect(() => {
+    if (!imagePreview) return;
+    const previousOverflow = document.body.style.overflow;
+    const returnFocus = imagePreviewReturnFocusRef.current;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setImagePreview(null);
+      if (event.key === "Tab") {
+        event.preventDefault();
+        imagePreviewCloseRef.current?.focus();
+      }
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    imagePreviewCloseRef.current?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+      returnFocus?.focus();
+      imagePreviewReturnFocusRef.current = null;
+    };
+  }, [imagePreview]);
 
   useEffect(() => {
     if (conversationType === "direct" && !recipientId) return;
@@ -1119,7 +1153,7 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
              <div className="chat-message-content"><div className="chat-message-meta"><strong>{isOwn ? "You" : author?.fullName ?? "Team member"}</strong><time dateTime={message.createdAt}>{formatStamp(message.createdAt)}</time></div>
                {message.reply && <div className="chat-reply-quote"><strong>{message.reply.senderId === user.id ? "You" : members.find((member) => member.id === message.reply?.senderId)?.fullName ?? "Team member"}</strong><span>{message.reply.body || "Attachment"}</span></div>}
                {message.body && <p>{message.body}</p>}
-               {message.attachments?.length ? <div className="chat-attachment-list">{message.attachments.map((attachment, index) => <ChatAttachmentPreview attachment={attachment} key={`${message.id}-file-${index}`} />)}</div> : null}
+               {message.attachments?.length ? <div className="chat-attachment-list">{message.attachments.map((attachment, index) => <ChatAttachmentPreview attachment={attachment} onOpenImage={openImagePreview} key={`${message.id}-file-${index}`} />)}</div> : null}
                <div className="chat-message-footer"><button type="button" className="chat-reply-button" onClick={() => setReplyTo(message)}><Reply size={13} />Reply</button>{isOwn && <details className="chat-reader-details"><summary className="chat-readers" aria-label={`${seenMembers.length} seen, ${unseenMembers.length} not seen`}>{seenMembers.slice(0, 8).map((reader) => <ProfileAvatar key={reader.id} name={reader.fullName} src={reader.avatarUrl} className="chat-reader-avatar" />)}<small>{seenMembers.length ? `${seenMembers.length} seen` : "Sent"}</small></summary><div className="chat-reader-popover"><div><strong>Seen</strong><span>{seenMembers.map((reader) => reader.fullName).join(", ") || "No one yet"}</span></div><div><strong>Not seen</strong><span>{unseenMembers.map((reader) => reader.fullName).join(", ") || "Everyone has seen it"}</span></div></div></details>}</div>
              </div>
           </article>;
@@ -1130,6 +1164,7 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
       {pendingAttachments.length > 0 && <div className="chat-pending-files">{pendingAttachments.map((attachment, index) => <div className="chat-pending-file" key={`${attachment.name}-${index}`}><span>{attachment.name} · {formatFileSize(attachment.size)}</span><button type="button" className="icon-button" aria-label={`Remove ${attachment.name}`} onClick={() => setPendingAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button></div>)}</div>}
       <form className="crew-chat-composer" onSubmit={sendMessage}><label className="chat-attach-button" title="Attach photos, videos, audio, or files"><Paperclip size={18} /><input aria-label="Attach photos, videos, audio, or files" type="file" multiple accept="image/*,video/mp4,video/webm,video/quicktime,audio/mpeg,audio/mp4,.m4a,.mp3,.pdf,.heic,.heif" onChange={attachFiles} /></label><textarea aria-label="Write a message" maxLength={2000} placeholder={conversationType === "direct" && !recipientId ? "Choose a team member first" : "Write a message…"} value={draft} onChange={(event) => setDraft(event.currentTarget.value)} disabled={conversationType === "direct" && !recipientId} /><button className="button button-primary" type="submit" disabled={sending || uploadingFiles || (!draft.trim() && !pendingAttachments.length) || (conversationType === "direct" && !recipientId)}><Send size={15} />{uploadingFiles ? "Uploading…" : sending ? "Sending…" : "Send"}</button></form>
     </section>
+    {imagePreview && <div className="chat-image-lightbox" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setImagePreview(null); }}><section className="chat-image-lightbox-dialog" role="dialog" aria-modal="true" aria-label={`Image preview: ${imagePreview.name}`}><button ref={imagePreviewCloseRef} type="button" className="icon-button chat-image-lightbox-close" aria-label="Close image preview" onClick={() => setImagePreview(null)}><X size={20} /></button><div className="chat-image-lightbox-frame"><NextImage unoptimized fill sizes="92vw" src={imagePreview.src} alt={imagePreview.name} className="chat-image-lightbox-image" /></div><p className="chat-image-lightbox-name">{imagePreview.name}</p></section></div>}
   </>;
 }
 
