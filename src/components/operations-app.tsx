@@ -951,12 +951,18 @@ function TimePage({ data, user, run }: { data: AppData; user: Profile; run: (act
 type ChatMember = Pick<Profile, "id" | "fullName" | "avatarUrl" | "role" | "jobTitle">;
 function chatFileUrl(path: string) { return `/api/chat/media?path=${encodeURIComponent(path)}`; }
 function ChatAttachmentPreview({ attachment }: { attachment: ChatAttachment }) {
-  const source = attachment.dataUrl ?? (attachment.path ? chatFileUrl(attachment.path) : "");
+  if (!attachment || typeof attachment !== "object") return null;
+  const type = typeof attachment.type === "string" ? attachment.type.toLowerCase() : "";
+  const name = typeof attachment.name === "string" && attachment.name.trim() ? attachment.name : "Attached file";
+  const size = typeof attachment.size === "number" && Number.isFinite(attachment.size) && attachment.size > 0 ? attachment.size : 0;
+  const dataUrl = typeof attachment.dataUrl === "string" ? attachment.dataUrl : "";
+  const path = typeof attachment.path === "string" ? attachment.path : "";
+  const source = dataUrl || (path ? chatFileUrl(path) : "");
   if (!source) return null;
-  if (attachment.type.startsWith("image/")) return <a className="chat-attachment-image-link" href={source} target="_blank" rel="noreferrer"><NextImage unoptimized src={source} alt={attachment.name} width={280} height={220} className="chat-attachment-image" /></a>;
-  if (attachment.type.startsWith("video/")) return <video className="chat-attachment-video" controls preload="metadata" src={source}>{attachment.name}</video>;
-  if (attachment.type.startsWith("audio/")) return <audio className="chat-attachment-audio" controls preload="metadata" src={source}>{attachment.name}</audio>;
-  return <a className="chat-attachment-file" href={source} target="_blank" rel="noreferrer"><FileText size={17} /><span><strong>{attachment.name}</strong><small>{formatFileSize(attachment.size)}</small></span><ArrowDownToLine size={14} /></a>;
+  if (type.startsWith("image/")) return <a className="chat-attachment-image-link" href={source} target="_blank" rel="noreferrer"><NextImage unoptimized src={source} alt={name} width={280} height={220} className="chat-attachment-image" /></a>;
+  if (type.startsWith("video/")) return <video className="chat-attachment-video" controls preload="metadata" src={source}>{name}</video>;
+  if (type.startsWith("audio/")) return <audio className="chat-attachment-audio" controls preload="metadata" src={source}>{name}</audio>;
+  return <a className="chat-attachment-file" href={source} target="_blank" rel="noreferrer"><FileText size={17} /><span><strong>{name}</strong><small>{size ? formatFileSize(size) : "File attachment"}</small></span><ArrowDownToLine size={14} /></a>;
 }
 function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mode"] }) {
   const [conversationType, setConversationType] = useState<"all" | "direct">("all");
