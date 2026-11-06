@@ -114,7 +114,7 @@ export async function GET(request: Request) {
 
   if (conversationType === "direct" && !z.string().uuid().safeParse(recipientId).success) return messageError("Choose a valid team member.");
   const supabase = await createSupabaseServerClient();
-  const messageSelection = "id,conversation_type,sender_id,recipient_id,body,created_at,reply_to_id,attachments,reply:crew_chat_messages!crew_chat_messages_reply_to_id_fkey(id,body,sender_id,attachments)";
+  const messageSelection = "id,conversation_type,sender_id,recipient_id,body,created_at,reply_to_id,attachments";
   const [memberResult, messageResult] = await Promise.all([
     supabase.rpc("list_crew_chat_members"),
     (conversationType === "all"
@@ -126,6 +126,12 @@ export async function GET(request: Request) {
   if (messageResult.error) return messageError(messageResult.error.message, 503);
   const members = (memberResult.data ?? []).map((profile: { id: string; full_name: string; avatar_url: string | null; role: string; job_title: string | null }) => ({ id: profile.id, fullName: profile.full_name, avatarUrl: profile.avatar_url ?? undefined, role: profile.role, jobTitle: profile.job_title ?? undefined }));
   const dbMessages = (messageResult.data ?? []) as unknown as Parameters<typeof mapDbMessage>[0][];
+  const replyParentIds = [...new Set(dbMessages.flatMap((message) => message.reply_to_id ? [message.reply_to_id] : []))];
+  const replyParentResult = replyParentIds.length
+    ? await supabase.from("crew_chat_messages").select("id,body,sender_id,attachments").in("id", replyParentIds)
+    : { data: [], error: null };
+  if (replyParentResult.error) return messageError(replyParentResult.error.message, 503);
+  const replyParents = new Map((replyParentResult.data ?? []).map((parent) => [parent.id, parent]));
   const incomingIds = dbMessages.filter((message) => message.sender_id !== context.user.id).map((message) => message.id);
   if (incomingIds.length) {
     await supabase.from("crew_chat_message_receipts").upsert(incomingIds.map((message_id) => ({ message_id, user_id: context.user.id })), { onConflict: "message_id,user_id", ignoreDuplicates: true });
@@ -141,7 +147,10 @@ export async function GET(request: Request) {
     list.push({ userId: receipt.user_id, readAt: receipt.read_at });
     receiptMap.set(receipt.message_id, list);
   }
-  const messages: ChatMessage[] = dbMessages.map((message) => mapDbMessage(message, receiptMap.get(message.id) ?? [])).reverse();
+  const messages: ChatMessage[] = dbMessages.map((message) => mapDbMessage({
+    ...message,
+    reply: message.reply_to_id ? replyParents.get(message.reply_to_id) ?? null : null,
+  }, receiptMap.get(message.id) ?? [])).reverse();
   return NextResponse.json({ members, messages });
 }
 
