@@ -45,7 +45,7 @@ export async function GET(request: Request) {
   const supabase = await createSupabaseServerClient();
   if (!path.startsWith(`${context.user.id}/chat/`)) {
     const { data: message, error: messageError } = await supabase.from("crew_chat_messages")
-      .select("id").contains("attachments", [{ path }]).limit(1).maybeSingle();
+      .select("id").contains("attachments", JSON.stringify([{ path }])).limit(1).maybeSingle();
     if (messageError || !message) return NextResponse.json({ error: "You cannot view this conversation attachment." }, { status: 403 });
   }
   const { data, error } = await supabase.storage.from("crew-media").createSignedUrl(path, 60);
