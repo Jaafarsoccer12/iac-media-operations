@@ -14,6 +14,9 @@ const extensionByType: Record<string, string> = {
   "video/mp4": "mp4", "video/webm": "webm", "video/quicktime": "mov",
   "audio/mpeg": "mp3", "audio/mp4": "m4a", "application/pdf": "pdf",
 };
+const imageTypeByExtension: Record<string, string> = {
+  jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif",
+};
 
 export async function POST(request: Request) {
   const context = await getSessionContext();
@@ -51,7 +54,8 @@ export async function GET(request: Request) {
   }
   const { data: blob, error } = await supabase.storage.from("crew-media").download(path);
   if (error || !blob) return NextResponse.json({ error: "Attachment not found or you do not have access to it." }, { status: 404 });
-  const type = allowedTypes.has(blob.type) ? blob.type : "application/octet-stream";
+  const extension = path.split("/").at(-1)?.split(".").pop()?.toLowerCase() ?? "";
+  const type = imageTypeByExtension[extension] ?? (allowedTypes.has(blob.type) ? blob.type : "application/octet-stream");
   return new Response(blob, {
     headers: {
       "Content-Type": type,
