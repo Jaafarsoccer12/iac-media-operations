@@ -90,6 +90,28 @@ export async function POST(request: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: "The account request could not be understood." }, { status: 400 });
   if (["team_reset_password", "team_set_password"].includes(parsed.data.action) && !isAdministrator) return NextResponse.json({ error: "Only an administrator can set or reset a team member's password." }, { status: 403 });
 
+  if (parsed.data.action === "team_update_roles") {
+    const values = z.object({ memberId: z.uuid(), accessRoles: accessRolesSchema }).safeParse(parsed.data.payload);
+    if (!values.success) return NextResponse.json({ error: values.error.issues.map((issue) => issue.message).join(" ") }, { status: 400 });
+    if (!isAdministrator && values.data.accessRoles.includes("Administrator")) return NextResponse.json({ error: "Only an administrator can grant administrator access." }, { status: 403 });
+    try {
+      if (context.mode === "demo") {
+        const current = (await listDemoTeamAccounts()).find((member) => member.id === values.data.memberId);
+        if (!current) return NextResponse.json({ error: "That team member could not be found." }, { status: 404 });
+        if (!isAdministrator && (current.accessRoles ?? [current.role]).includes("Administrator")) return NextResponse.json({ error: "Only an administrator can edit an administrator account." }, { status: 403 });
+        const role = primaryAccessRole(values.data.accessRoles, "Videographer");
+        await updateDemoTeamAccount({ memberId: current.id, fullName: current.fullName, username: current.username, jobTitle: current.jobTitle, avatarUrl: current.avatarUrl ?? "", accessRoles: values.data.accessRoles, active: current.active }, context.user.id);
+        return NextResponse.json({ ok: true, role });
+      }
+      const supabase = await createSupabaseServerClient();
+      const { error } = await supabase.rpc("admin_update_profile_roles", { p_member_id: values.data.memberId, p_access_roles: values.data.accessRoles });
+      if (error) throw new Error(error.message);
+      return NextResponse.json({ ok: true });
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "App access roles could not be updated." }, { status: 400 });
+    }
+  }
+
   if (context.mode === "demo") {
     try {
       if (parsed.data.action === "team_invite") {
