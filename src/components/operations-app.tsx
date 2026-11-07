@@ -28,6 +28,15 @@ function selectedProductionRoles(value?: string, roles: string[] = productionPos
   return roles.filter((role) => selected.has(role));
 }
 
+async function readApiJson<T>(response: Response): Promise<T> {
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.includes("application/json") && !contentType.includes("application/problem+json")) {
+    throw new Error(`The app server returned a webpage instead of data (HTTP ${response.status}). Your current session was kept; try again in a moment.`);
+  }
+  try { return await response.json() as T; }
+  catch { throw new Error("The app server response was incomplete. Your current session was kept; try again in a moment."); }
+}
+
 const teamInvitePresets: { id: string; fullName: string; username: string; productionRoles: string[]; accessRoles: AppRole[] }[] = [
   { id: "director", fullName: "Director", username: "director", productionRoles: ["Director"], accessRoles: ["Director"] },
   { id: "ptz-operator", fullName: "PTZ Camera Operator", username: "ptz.operator", productionRoles: ["PTZ Camera Operator"], accessRoles: ["PTZ Camera Operator"] },
@@ -267,6 +276,7 @@ export function OperationsApp() {
   const [animatedNavItems, setAnimatedNavItems] = useState<PageKey[]>([]);
   const [loginError, setLoginError] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
+  const appSessionEstablished = useRef(false);
   const seenNotificationIds = useRef<Set<string> | null>(null);
   const notificationUserId = useRef<string | null>(null);
   const alarmReminderAt = useRef(new Map<string, number>());
@@ -406,17 +416,30 @@ export function OperationsApp() {
 
   const load = useCallback(async (showLoginFailure = false) => {
     try {
-      const settings = await fetch("/api/auth", { cache: "no-store" }).then((r) => r.json());
+      const authResponse = await fetch("/api/auth", { cache: "no-store" });
+      const settings = await readApiJson<{ demoAvailable: boolean; supabaseConfigured: boolean }>(authResponse);
+      if (!authResponse.ok) throw new Error("Sign-in settings could not be loaded. Try again in a moment.");
       setAuthSettings(settings);
       await fetch("/api/operations", { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "process_due_alarms", payload: {} }) }).catch(() => undefined);
-      const response = await fetch("/api/bootstrap", { cache: "no-store" });
+      let response = await fetch("/api/bootstrap", { cache: "no-store" });
+      let body = await readApiJson<AppPayload & { error?: string }>(response);
+      if (response.status === 401) {
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+        response = await fetch("/api/bootstrap", { cache: "no-store" });
+        body = await readApiJson<AppPayload & { error?: string }>(response);
+      }
       if (!response.ok) {
-        const failure = await response.json().catch(() => null) as { error?: string } | null;
-        setPayload(null); seenNotificationIds.current = null; notificationUserId.current = null;
-        if (showLoginFailure) setLoginError(failure?.error ?? `Your sign-in was accepted, but the dashboard could not load (HTTP ${response.status}). Please try again.`);
+        const hadSession = appSessionEstablished.current;
+        if (response.status === 401) {
+          setPayload(null); seenNotificationIds.current = null; notificationUserId.current = null; appSessionEstablished.current = false;
+          if (showLoginFailure || hadSession) setLoginError(body.error ?? "Your sign-in expired. Please sign in again.");
+        } else {
+          const message = body.error ?? `Dashboard refresh failed (HTTP ${response.status}).`;
+          if (showLoginFailure) setLoginError(`Your sign-in was accepted, but the dashboard could not load: ${message}`);
+          else if (hadSession) setNotice({ text: `${message} Your current session is still open; the app will retry.`, error: true });
+        }
         return false;
       }
-      const body = await response.json();
       const nextPayload = body as AppPayload;
       setCurrentTime(Date.now());
       const nextUserId = nextPayload.context.user.id;
@@ -441,6 +464,8 @@ export function OperationsApp() {
       try { window.localStorage.setItem(`iac-notifications-seen:${nextUserId}`, JSON.stringify([...(seenNotificationIds.current ?? seen)])); } catch { /* Notifications still work when browser storage is unavailable. */ }
       notificationUserId.current = nextUserId;
       setPayload(nextPayload);
+      appSessionEstablished.current = true;
+      setLoginError("");
       return true;
     } catch (failure) {
       const detail = failure instanceof Error ? failure.message : "Could not connect to the application server.";
@@ -703,7 +728,7 @@ export function OperationsApp() {
 
   const signOut = async () => {
     await fetch("/api/auth", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "logout" }) });
-    seenNotificationIds.current = null; notificationUserId.current = null; setChatUnread({ userId: null, count: 0 }); setNotificationAlert(null); setPage("dashboard"); setPayload(null); await load();
+    seenNotificationIds.current = null; notificationUserId.current = null; appSessionEstablished.current = false; setChatUnread({ userId: null, count: 0 }); setNotificationAlert(null); setPage("dashboard"); setPayload(null); await load();
   };
 
   const context = payload?.context;
@@ -1009,6 +1034,7 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
   const [unreadCounts, setUnreadCounts] = useState<{ all: number; direct: Record<string, number> }>({ all: 0, direct: {} });
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState("");
+  const [deletingMessageId, setDeletingMessageId] = useState<string | null>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [pushAvailable, setPushAvailable] = useState(false);
   const [pushEnabled, setPushEnabled] = useState(false);
@@ -1022,6 +1048,7 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
   const shouldScrollToBottom = useRef(true);
   const isAtBottom = useRef(true);
   const knownMessageIds = useRef<Set<string> | null>(null);
+  const messageStateSignature = useRef<string | null>(null);
   const [freshMessageIds, setFreshMessageIds] = useState<Set<string>>(() => new Set());
   const freshMessageTimer = useRef<number | null>(null);
   const recipient = members.find((member) => member.id === recipientId);
@@ -1061,6 +1088,7 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
     let firstLoad = true;
     let refreshing = false;
     knownMessageIds.current = null;
+    messageStateSignature.current = null;
     shouldScrollToBottom.current = true;
     const refresh = async () => {
       if (refreshing) return;
@@ -1070,13 +1098,19 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
       if (conversationType === "direct") params.set("recipientId", recipientId);
       try {
         const response = await fetch(`/api/chat?${params.toString()}`, { cache: "no-store" });
-        const body = await response.json() as { members?: ChatMember[]; messages?: ChatMessage[]; error?: string };
+        const body = await readApiJson<{ members?: ChatMember[]; messages?: ChatMessage[]; error?: string }>(response);
         if (!response.ok) throw new Error(body.error || "Chat could not be loaded.");
         if (!active) return;
         const nextMessages = body.messages ?? [];
         const previousIds = knownMessageIds.current;
         const hasNewMessages = previousIds !== null && nextMessages.some((message) => !previousIds.has(message.id));
-        const messagesChanged = previousIds === null || nextMessages.length !== previousIds.size || hasNewMessages;
+        const nextSignature = JSON.stringify(nextMessages.map((message) => ({
+          id: message.id,
+          body: message.body,
+          editedAt: message.editedAt ?? null,
+          receipts: [...(message.receipts ?? [])].map((receipt) => [receipt.userId, receipt.readAt]).sort(([left], [right]) => String(left).localeCompare(String(right))),
+        })));
+        const messagesChanged = messageStateSignature.current !== nextSignature;
         if (previousIds) {
           const arrivals = nextMessages.filter((message) => !previousIds.has(message.id)).map((message) => message.id);
           if (arrivals.length) {
@@ -1086,6 +1120,7 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
           }
         }
         knownMessageIds.current = new Set(nextMessages.map((message) => message.id));
+        messageStateSignature.current = nextSignature;
         setMembers(body.members ?? []);
         if (messagesChanged) {
           const shouldFollow = previousIds === null || isAtBottom.current;
@@ -1190,6 +1225,23 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Message could not be edited."); }
   };
 
+  const deleteMessage = async (message: ChatMessage) => {
+    if (deletingMessageId) return;
+    setDeletingMessageId(message.id);
+    setError("");
+    try {
+      const response = await fetch("/api/chat", { method: "DELETE", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messageId: message.id }) });
+      const result = await readApiJson<{ deletedMessageId?: string; error?: string; warning?: string }>(response);
+      if (!response.ok || !result.deletedMessageId) throw new Error(result.error || "Message could not be deleted.");
+      setMessages((current) => current.filter((item) => item.id !== message.id));
+      knownMessageIds.current?.delete(message.id);
+      messageStateSignature.current = null;
+      if (result.warning) setError(result.warning);
+      if (replyTo?.id === message.id) setReplyTo(null);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Message could not be deleted."); }
+    finally { setDeletingMessageId(null); }
+  };
+
   const enablePhoneAlerts = async () => {
     setPushBusy(true); setPushMessage("");
     try {
@@ -1291,13 +1343,14 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
           const readIds = new Set((message.receipts ?? []).map((receipt) => receipt.userId));
           const seenMembers = receiptAudience.filter((member) => readIds.has(member.id));
           const unseenMembers = receiptAudience.filter((member) => !readIds.has(member.id));
+          const canDeleteMessage = isOwn && (Date.now() - Date.parse(message.createdAt) < 10_000 || seenMembers.length === 0);
           return <article key={message.id} className={`chat-message-row ${isOwn ? "is-own" : ""} ${freshMessageIds.has(message.id) ? "is-new-arrival" : ""}`}>
             <ProfileAvatar name={author?.fullName ?? "Team member"} src={author?.avatarUrl} className="chat-avatar" />
              <div className="chat-message-content"><div className="chat-message-meta"><strong>{isOwn ? "You" : author?.fullName ?? "Team member"}</strong><time dateTime={message.createdAt}>{formatStamp(message.createdAt)}</time></div>
                {message.reply && <div className="chat-reply-quote"><strong>{message.reply.senderId === user.id ? "You" : members.find((member) => member.id === message.reply?.senderId)?.fullName ?? "Team member"}</strong><span>{message.reply.body || "Attachment"}</span></div>}
                 {message.body && (editingMessageId === message.id ? <form className="chat-message-edit-form" onSubmit={(event) => void saveMessageEdit(event, message.id)}><textarea aria-label="Edit message" maxLength={2000} value={editDraft} onChange={(event) => setEditDraft(event.currentTarget.value)} autoFocus /><div><button type="button" className="button button-small button-quiet" onClick={() => { setEditingMessageId(null); setEditDraft(""); }}>Cancel</button><button type="submit" className="button button-small button-primary" disabled={!editDraft.trim()}>Save edit</button></div></form> : <ChatMessageText body={message.body} members={members} />)}
                {message.attachments?.length ? <div className="chat-attachment-list">{message.attachments.map((attachment, index) => <ChatAttachmentPreview attachment={attachment} onOpenImage={openImagePreview} key={`${message.id}-file-${index}`} />)}</div> : null}
-                <div className="chat-message-footer"><button type="button" className="chat-reply-button" onClick={() => setReplyTo(message)}><Reply size={13} />Reply</button>{message.editedAt && <small className="chat-edited-label">Edited</small>}{isOwn && <><details className="chat-message-menu"><summary className="icon-button" aria-label="Message options"><MoreVertical size={15} /></summary><div><button type="button" onClick={(event) => { const menu = event.currentTarget.closest("details"); if (menu) menu.open = false; setEditingMessageId(message.id); setEditDraft(message.body); }}>Edit message</button></div></details><details className="chat-reader-details"><summary className="chat-readers" aria-label={`${seenMembers.length} seen, ${unseenMembers.length} not seen`}>{seenMembers.slice(0, 3).map((reader) => <ProfileAvatar key={reader.id} name={reader.fullName} src={reader.avatarUrl} className="chat-reader-avatar" />)}{seenMembers.length > 3 && <span className="chat-reader-overflow">+{seenMembers.length - 3}</span>}<small>{seenMembers.length ? `${seenMembers.length} seen` : "Sent"}</small></summary><div className="chat-reader-popover"><div><strong>Seen</strong><span>{seenMembers.map((reader) => reader.fullName).join(", ") || "No one yet"}</span></div><div><strong>Not seen</strong><span>{unseenMembers.map((reader) => reader.fullName).join(", ") || "Everyone has seen it"}</span></div></div></details></>}</div>
+                <div className="chat-message-footer"><button type="button" className="chat-reply-button" onClick={() => setReplyTo(message)}><Reply size={13} />Reply</button>{message.editedAt && <small className="chat-edited-label">Edited</small>}{isOwn && <><details className="chat-message-menu"><summary className="icon-button" aria-label="Message options"><MoreVertical size={15} /></summary><div><button type="button" onClick={(event) => { const menu = event.currentTarget.closest("details"); if (menu) menu.open = false; setEditingMessageId(message.id); setEditDraft(message.body); }}>Edit message</button>{canDeleteMessage && <button type="button" className="chat-message-delete" disabled={deletingMessageId === message.id} onClick={(event) => { const menu = event.currentTarget.closest("details"); if (menu) menu.open = false; if (window.confirm("Delete this message for everyone?")) void deleteMessage(message); }}>{deletingMessageId === message.id ? "Deleting…" : "Delete message"}</button>}</div></details><details className="chat-reader-details"><summary className="chat-readers" aria-label={`${seenMembers.length} seen, ${unseenMembers.length} not seen`}>{seenMembers.slice(0, 3).map((reader) => <ProfileAvatar key={reader.id} name={reader.fullName} src={reader.avatarUrl} className="chat-reader-avatar" />)}{seenMembers.length > 3 && <span className="chat-reader-overflow">+{seenMembers.length - 3}</span>}<small>{seenMembers.length ? `${seenMembers.length} seen` : "Sent"}</small></summary><div className="chat-reader-popover"><div><strong>Seen</strong><span>{seenMembers.map((reader) => reader.fullName).join(", ") || "No one yet"}</span></div><div><strong>Not seen</strong><span>{unseenMembers.map((reader) => reader.fullName).join(", ") || "Everyone has seen it"}</span></div></div></details></>}</div>
              </div>
           </article>;
         }) : <div className="crew-chat-empty"><MessageCircle size={22} /><strong>{conversationType === "all" ? "Start the crew conversation" : "No messages yet"}<small>Send a message to get the conversation started.</small></strong></div>}

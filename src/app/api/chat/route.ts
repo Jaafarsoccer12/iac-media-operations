@@ -37,6 +37,7 @@ const messageSchema = z.object({
   if (!value.body && value.attachments.length === 0) context.addIssue({ code: "custom", path: ["body"], message: "Write a message or attach a file." });
 });
 const editMessageSchema = z.object({ messageId: z.string().uuid(), body: z.string().trim().min(1).max(2000) });
+const deleteMessageSchema = z.object({ messageId: z.string().uuid() });
 
 function visibleAttachment(attachment: ChatAttachment, demo: boolean): ChatAttachment {
   return demo ? attachment : { ...attachment, dataUrl: undefined, path: attachment.path };
@@ -310,4 +311,69 @@ export async function PATCH(request: Request) {
     await pushMentionToDevices(newMentionIds, "You were mentioned in crew chat", `${context.user.fullName} mentioned you in a message.`);
   }
   return NextResponse.json({ message: mapDbMessage(row as Parameters<typeof mapDbMessage>[0]) });
+}
+
+export async function DELETE(request: Request) {
+  const context = await getSessionContext();
+  if (!context) return messageError("Sign in to delete chat messages.", 401);
+  let input: unknown;
+  try { input = await request.json(); } catch { return messageError("Choose a message to delete."); }
+  const parsed = deleteMessageSchema.safeParse(input);
+  if (!parsed.success) return messageError(parsed.error.issues.map((issue) => issue.message).join(" "));
+
+  if (context.mode === "demo") {
+    try {
+      await updateDemoStore((data) => {
+        const message = (data.chatMessages ?? []).find((item) => item.id === parsed.data.messageId && item.senderId === context.user.id);
+        if (!message) throw new Error("You can only delete your own messages.");
+        const withinGracePeriod = Date.now() - Date.parse(message.createdAt) < 10_000;
+        const hasBeenRead = (message.receipts ?? []).some((receipt) => receipt.userId !== context.user.id);
+        if (!withinGracePeriod && hasBeenRead) throw new Error("This message can no longer be deleted because it has been read.");
+        data.chatMessages = (data.chatMessages ?? []).filter((item) => item.id !== message.id);
+      });
+    } catch (error) {
+      return messageError(error instanceof Error ? error.message : "This message could not be deleted.", 403);
+    }
+    return NextResponse.json({ deletedMessageId: parsed.data.messageId });
+  }
+
+  if (!hasSupabaseAdminConfig()) return messageError("Message deletion is not configured on the server.", 503);
+  const admin = createSupabaseAdminClient();
+  const { data: message, error: messageErrorResult } = await admin.from("crew_chat_messages")
+    .select("id,sender_id,created_at,attachments")
+    .eq("id", parsed.data.messageId)
+    .eq("sender_id", context.user.id)
+    .maybeSingle();
+  if (messageErrorResult) return messageError("This message could not be checked for deletion.", 503);
+  if (!message) return messageError("You can only delete your own messages.", 403);
+
+  const { data: readers, error: receiptError } = await admin.from("crew_chat_message_receipts")
+    .select("user_id")
+    .eq("message_id", message.id)
+    .neq("user_id", context.user.id)
+    .limit(1);
+  if (receiptError) return messageError("Read status could not be checked, so the message was kept.", 503);
+  const withinGracePeriod = Date.now() - Date.parse(message.created_at) < 10_000;
+  if (!withinGracePeriod && (readers ?? []).length > 0) {
+    return messageError("This message can no longer be deleted because it has been read.", 409);
+  }
+
+  const { data: deleted, error: deleteError } = await admin.from("crew_chat_messages")
+    .delete()
+    .eq("id", message.id)
+    .eq("sender_id", context.user.id)
+    .select("id")
+    .maybeSingle();
+  if (deleteError) return messageError("This message could not be deleted.", 503);
+  if (!deleted) return messageError("This message is no longer available.", 404);
+
+  const attachmentPaths = ((message.attachments ?? []) as ChatAttachment[])
+    .map((attachment) => attachment.path)
+    .filter((path): path is string => typeof path === "string" && path.startsWith(`${context.user.id}/chat/`));
+  let warning: string | undefined;
+  if (attachmentPaths.length) {
+    const { error: storageError } = await admin.storage.from("crew-media").remove(attachmentPaths);
+    if (storageError) warning = "The message was deleted, but its attached files could not be removed.";
+  }
+  return NextResponse.json({ deletedMessageId: message.id, warning });
 }

@@ -1794,6 +1794,8 @@ html[data-theme="dark"] .crew-chat-composer textarea { border-color: rgba(199, 1
 .chat-message-menu > div { position: absolute; right: 0; bottom: calc(100% + 4px); z-index: 6; min-width: 130px; padding: 4px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); box-shadow: var(--shadow); }
 .chat-message-menu button { width: 100%; padding: 7px 8px; border: 0; border-radius: 5px; color: var(--ink); background: transparent; text-align: left; font-size: 10px; cursor: pointer; }
 .chat-message-menu button:hover { background: var(--canvas); }
+.chat-message-menu button.chat-message-delete { color: var(--red); }
+.chat-message-menu button.chat-message-delete:hover { background: color-mix(in srgb, var(--red) 10%, transparent); }
 .chat-message-edit-form { display: grid; gap: 7px; min-width: min(420px, 70vw); }
 .chat-message-edit-form textarea { min-height: 64px; padding: 9px; border: 1px solid var(--line); border-radius: 7px; color: var(--ink); background: var(--surface); font: inherit; resize: vertical; }
 .chat-message-edit-form > div { display: flex; justify-content: flex-end; gap: 6px; }
