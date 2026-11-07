@@ -8,6 +8,10 @@ test("current production roles receive only their intended capabilities", () => 
   assert.equal(can("Videographer", "manage_events"), false);
   assert.equal(can("PTZ Camera Operator", "complete_checklists"), true);
   assert.equal(can("Equipment Manager", "manage_equipment"), true);
+  assert.equal(can("Administrator", "manage_equipment_inventory"), true);
+  assert.equal(can("Equipment Manager", "manage_equipment_inventory"), true);
+  assert.equal(can("Director", "manage_equipment_inventory"), false);
+  assert.equal(can("Videographer", "manage_equipment_inventory"), false);
   assert.equal(can("Audio Operator", "manage_equipment"), false);
   assert.equal(isStaff("Director"), true);
   assert.equal(isStaff("Video Operator"), false);

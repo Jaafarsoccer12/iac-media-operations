@@ -652,7 +652,7 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         return { ok: true, count: createdLoans.length };
       }
       case "create_asset": {
-        requireCapability(user.accessRoles ?? user.role, "manage_equipment");
+        requireCapability(user.accessRoles ?? user.role, "manage_equipment_inventory");
         const values = record(assetSchema, p);
         if (data.assets.some((item) => item.assetCode.toLowerCase() === values.assetCode.toLowerCase())) throw new AppError("That asset ID is already in use.", 409);
         const asset = { id: id(), ...values, status: values.condition === "Good" ? "Available" as const : "Under maintenance" as const };
@@ -681,7 +681,7 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         return { ok: true };
       }
       case "delete_asset": {
-        requireCapability(user.accessRoles ?? user.role, "manage_equipment");
+        requireCapability(user.accessRoles ?? user.role, "manage_equipment_inventory");
         const { assetId } = record(deleteAssetSchema, p);
         if (data.equipmentTemplates.some((template) => template.items.some((item) => item.assetId === assetId))) throw new AppError("Remove this equipment from its saved templates before deleting it.", 409);
         const index = data.assets.findIndex((item) => item.id === assetId);
@@ -1138,7 +1138,7 @@ async function runSupabase(action: string, payload: Record<string, unknown>, use
       fail(error); return { ok: true };
     }
     case "create_asset": {
-      requireCapability(user.accessRoles ?? user.role, "manage_equipment");
+      requireCapability(user.accessRoles ?? user.role, "manage_equipment_inventory");
       const values = record(assetSchema, p);
       const sheetSynced = await syncEquipmentSheetRow(values);
       const { data, error } = await supabase.from("equipment_assets").insert({ asset_code: values.assetCode, name: values.name, category: values.category, storage_location: values.location, model: values.model, serial_number: values.serial, quantity: values.quantity, condition: values.condition, status: values.condition === "Good" ? "Available" : "Under maintenance", notes: values.notes, created_by: user.id }).select("id").single();
@@ -1155,7 +1155,7 @@ async function runSupabase(action: string, payload: Record<string, unknown>, use
       fail(error); return { ok: true };
     }
     case "delete_asset": {
-      requireCapability(user.accessRoles ?? user.role, "manage_equipment");
+      requireCapability(user.accessRoles ?? user.role, "manage_equipment_inventory");
       const { assetId } = record(deleteAssetSchema, p);
       const { error } = await supabase.rpc("delete_equipment_asset", { p_asset_id: assetId });
       fail(error); return { ok: true };

@@ -1,14 +1,14 @@
 export const STAFF_ROLES = ["Administrator", "Director"];
 
 const CAPABILITIES = {
-  Administrator: ["manage_system", "manage_events", "manage_team", "manage_equipment", "view_equipment", "manage_sops", "manage_content", "resolve_incidents", "view_reports", "view_team", "update_content", "view_sops", "manage_checklists", "report_incidents", "complete_checklists", "view_public_events", "view_notifications"],
+  Administrator: ["manage_system", "manage_events", "manage_team", "manage_equipment", "manage_equipment_inventory", "view_equipment", "manage_sops", "manage_content", "resolve_incidents", "view_reports", "view_team", "update_content", "view_sops", "manage_checklists", "report_incidents", "complete_checklists", "view_public_events", "view_notifications"],
   Director: ["manage_system", "manage_events", "manage_team", "manage_equipment", "view_equipment", "manage_sops", "manage_content", "resolve_incidents", "view_reports", "view_team", "update_content", "view_sops", "manage_checklists", "report_incidents", "complete_checklists", "view_public_events", "view_notifications"],
   Videographer: ["view_equipment", "complete_checklists", "report_incidents", "update_content", "view_sops", "view_notifications"],
   "Video Switcher Operator": ["view_equipment", "complete_checklists", "report_incidents", "update_content", "view_sops", "view_notifications"],
   "Camera Operator": ["view_equipment", "complete_checklists", "report_incidents", "update_content", "view_sops", "view_notifications"],
   "PTZ Camera Operator": ["view_equipment", "complete_checklists", "report_incidents", "update_content", "view_sops", "view_notifications"],
   "Audio Operator": ["view_equipment", "complete_checklists", "report_incidents", "update_content", "view_sops", "view_notifications"],
-  "Equipment Manager": ["manage_equipment", "view_equipment", "report_incidents", "view_notifications"],
+  "Equipment Manager": ["manage_equipment", "manage_equipment_inventory", "view_equipment", "report_incidents", "view_notifications"],
   "Video Operator": ["view_equipment", "complete_checklists", "report_incidents", "update_content", "view_sops", "view_notifications"],
   Photography: ["view_equipment", "complete_checklists", "report_incidents", "update_content", "view_sops", "view_notifications"],
 };

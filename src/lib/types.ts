@@ -13,6 +13,7 @@ export type Assignment = {
 };
 export type Asset = {
   id: string; assetCode: string; name: string; category: string; location: string;
+  imagePath?: string;
   quantity?: number;
   condition: "Good" | "Needs service" | "Damaged"; status: "Available" | "Reserved" | "Checked out" | "Under maintenance" | "Damaged" | "Missing" | "Retired";
   model: string; serial: string; notes: string; currentCustodianId?: string;

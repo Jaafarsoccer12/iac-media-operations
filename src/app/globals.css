@@ -1661,15 +1661,24 @@ html[data-theme="dark"] .alarm-countdown-widget-copy em { color: hsl(var(--alarm
   .modal-sop-reading,.modal-event-report { width: 100%; height: 96vh; max-height: 96vh; }
 }
 @media print {
-  body * { visibility: hidden !important; }
+  @page { margin: 12mm; }
+  body:has(.event-report-backdrop) * { visibility: hidden !important; }
   .event-report-backdrop,
   .event-report-backdrop * { visibility: visible !important; }
+  body:has(.event-report-backdrop) { min-height: 0 !important; background: #fff !important; }
+  body:has(.event-report-backdrop) .sidebar,
+  body:has(.event-report-backdrop) .topbar { display: none !important; }
+  body:has(.event-report-backdrop) .main-column { min-height: 0 !important; margin: 0 !important; }
+  body:has(.event-report-backdrop) .main-content { display: block !important; width: 100% !important; max-width: none !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; }
+  body:has(.event-report-backdrop) .main-content > :not(.event-report-backdrop) { display: none !important; }
   .event-report-backdrop { position: static !important; inset: auto !important; display: block !important; padding: 0 !important; overflow: visible !important; background: #fff !important; }
   .modal-event-report { position: static !important; width: 100% !important; height: auto !important; max-height: none !important; overflow: visible !important; border: 0 !important; box-shadow: none !important; }
   .modal-event-report .modal-head { position: static !important; border-bottom: 1px solid #bbb !important; }
-  .event-report-content { max-height: none !important; overflow: visible !important; padding: 10px 0 !important; }
+  .event-report-content { max-height: none !important; overflow: visible !important; padding: 10px 0 !important; color: #111 !important; }
   .event-report-toolbar button,.modal-head > button { display: none !important; }
-  .event-report-section,.event-report-summary { break-inside: avoid; }
+  .event-report-section { break-inside: auto !important; color: #111 !important; }
+  .event-report-summary,.event-report-list > div,.event-report-timeline li { break-inside: avoid; }
+  .event-report-section h3 { break-after: avoid; }
 }
 @media (max-width: 900px) and (min-width: 681px) {
   .nav-link { position: relative; }
@@ -1681,6 +1690,46 @@ html[data-theme="dark"] .alarm-countdown-widget-copy em { color: hsl(var(--alarm
   .alarm-countdown-widget.is-near-due .alarm-countdown-widget-icon svg,
   .chat-message-row.is-new-arrival .chat-message-content { animation: none !important; }
   .button:not(:disabled):active, .icon-button:active { transform: none; }
+}
+
+/* Full-page SOP reading and a clear, high-priority phase-change announcement. */
+.sop-reading-backdrop { z-index: 120; padding: 0; background: var(--canvas); backdrop-filter: none; }
+.modal-sop-reading { display: flex; width: 100vw; height: 100vh; height: 100dvh; max-height: none; flex-direction: column; overflow: hidden; border: 0; border-radius: 0; animation: none; }
+.modal-sop-reading .modal-head { position: relative; flex: 0 0 auto; }
+.modal-sop-reading .sop-detail { width: min(1100px, 100%); max-height: none; min-height: 0; flex: 1 1 auto; align-self: center; overflow: auto; }
+.program-phase-change-banner { position: fixed; top: 78px; left: 50%; z-index: 150; display: grid; width: min(760px, calc(100vw - 28px)); grid-template-columns: 1fr auto; align-items: center; gap: 4px 18px; padding: 18px 56px 18px 22px; transform: translateX(-50%); border: 1px solid rgba(255,255,255,.24); border-radius: 16px; color: #fff; background: linear-gradient(115deg, #173b77, #2858c7); box-shadow: 0 16px 48px rgba(20,46,99,.28); animation: phase-banner-in .2s ease-out; }
+.program-phase-change-banner > span { grid-column: 1; color: rgba(255,255,255,.82); font-size: 12px; font-weight: 700; letter-spacing: .03em; }
+.program-phase-change-banner > strong { grid-column: 1; font-size: clamp(23px, 4vw, 34px); line-height: 1.05; }
+.program-phase-change-banner > small { grid-column: 1; margin-top: 3px; color: rgba(255,255,255,.78); font-size: 12px; }
+.program-phase-change-banner > .icon-button { position: absolute; top: 12px; right: 12px; color: #fff; }
+@keyframes phase-banner-in { from { opacity: 0; transform: translate(-50%, -8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+.asset-image-trigger { padding: 0; overflow: hidden; border: 0; cursor: pointer; }
+.asset-image-trigger img { width: 100%; height: 100%; object-fit: cover; }
+.asset-detail-link { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; color: inherit; background: transparent; font: inherit; text-align: left; cursor: pointer; }
+.asset-detail-link svg { opacity: 0; transition: opacity .15s ease; }
+.asset-detail-link:hover svg,.asset-detail-link:focus-visible svg { opacity: 1; }
+.modal-asset-details { width: min(980px, calc(100vw - 28px)); max-height: 92dvh; }
+.asset-details-content { display: grid; grid-template-columns: minmax(220px, .8fr) minmax(0, 1.4fr); gap: 20px; padding: 22px; }
+.asset-details-summary { display: flex; min-width: 0; flex-direction: column; gap: 14px; }
+.asset-details-summary > p { margin: 0; color: var(--muted); line-height: 1.6; white-space: pre-wrap; }
+.asset-detail-meta { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+.asset-detail-meta > span { display: flex; min-width: 0; flex-direction: column; gap: 5px; padding: 11px; border: 1px solid var(--line); border-radius: 10px; }
+.asset-detail-meta small { color: var(--muted); font-size: 9px; font-weight: 750; letter-spacing: .08em; }
+.asset-detail-meta strong { color: var(--ink); overflow-wrap: anywhere; }
+.asset-detail-photo-panel { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
+.asset-detail-image { display: block; width: 100%; height: min(60vh, 540px); object-fit: contain; border-radius: 12px; background: var(--canvas); }
+.asset-detail-photo-empty { display: grid; min-height: 250px; place-content: center; gap: 10px; border: 1px dashed var(--line); border-radius: 12px; color: var(--muted); text-align: center; }
+.asset-photo-controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.asset-photo-controls label { position: relative; overflow: hidden; }
+.asset-photo-controls input[type="file"] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+
+@media (max-width: 680px) {
+  .modal-sop-reading { width: 100vw; height: 100vh; height: 100dvh; max-height: none; }
+  .modal-sop-reading .sop-detail { padding-right: 16px; padding-left: 16px; }
+  .program-phase-change-banner { top: 64px; padding: 15px 48px 15px 17px; }
+  .asset-details-content { grid-template-columns: 1fr; padding: 14px; }
+  .asset-detail-image { height: min(46vh, 420px); }
 }
 
 /* Make Crew chat a full-height conversation instead of a short dashboard card. */
