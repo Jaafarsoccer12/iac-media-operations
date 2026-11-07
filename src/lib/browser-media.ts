@@ -11,6 +11,18 @@ function isHeic(file: File) {
 }
 
 async function convertHeicToJpeg(file: File) {
+  try {
+    const heic2any = (await import("heic2any")).default;
+    const converted = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.9 });
+    const jpeg = Array.isArray(converted) ? converted[0] : converted;
+    if (!(jpeg instanceof Blob)) throw new Error("The HEIC converter returned no image.");
+    if (jpeg.size > MAX_CHAT_FILE_BYTES) throw new Error("The converted photo is over 50 MB. Choose a smaller image.");
+    const filename = file.name.replace(/\.(heic|heif)$/i, "") || "photo";
+    return new File([jpeg], `${filename}.jpg`, { type: "image/jpeg", lastModified: file.lastModified });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("over 50 MB")) throw error;
+  }
+
   let bitmap: ImageBitmap | null = null;
   let image: HTMLImageElement | null = null;
   let objectUrl: string | null = null;
@@ -37,7 +49,7 @@ async function convertHeicToJpeg(file: File) {
     const filename = file.name.replace(/\.(heic|heif)$/i, "") || "photo";
     return new File([jpeg], `${filename}.jpg`, { type: "image/jpeg", lastModified: file.lastModified });
   } catch {
-    throw new Error("This browser could not decode the HEIC photo. On iPhone, choose Most Compatible in Camera settings or export the photo as JPEG, then attach it again.");
+    throw new Error("This photo format could not be opened. Choose a JPG, PNG, or WebP image, or export the iPhone photo as JPEG and attach it again.");
   } finally {
     bitmap?.close();
     if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -49,7 +61,7 @@ export async function prepareChatFile(file: File) {
   const prepared = isHeic(file) ? await convertHeicToJpeg(file) : file;
   const normalizedType = prepared.type || "application/octet-stream";
   if (!ACCEPTED_CHAT_TYPES.has(normalizedType)) {
-    throw new Error("Supported chat files are JPG, PNG, WebP, GIF, MP4, WebM, QuickTime video, MP3, M4A, and PDF. HEIC photos are converted to JPEG when this browser can decode them.");
+    throw new Error("This photo format could not be opened. Choose a JPG, PNG, or WebP image. Chat also accepts GIF, MP4, WebM, QuickTime video, MP3, M4A, and PDF.");
   }
   return prepared;
 }

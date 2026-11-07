@@ -46,8 +46,8 @@ const incidentSchema = z.object({ eventId: z.preprocess((value) => value === "" 
 const incidentEditSchema = z.object({ incidentId: z.string().min(1), eventId: z.preprocess((value) => value === "" ? undefined : value, z.string().optional()), assetId: z.preprocess((value) => value === "" ? undefined : value, z.string().optional()), category: z.string().trim().min(1).max(120), severity: z.enum(["Low", "Medium", "High", "Critical"]), description: z.string().trim().min(1).max(2000), immediateAction: z.string().max(1000).default(""), photos: z.array(incidentPhotoSchema).max(5).default([]), status: z.enum(["Open", "Acknowledged", "In progress", "Resolved", "Closed"]), resolution: z.string().trim().max(2000).default("") });
 const incidentCompletionSchema = z.object({ incidentId: z.string().min(1), resolution: z.string().trim().min(1).max(2000), photos: z.array(incidentPhotoSchema).max(5).default([]) });
 const incidentDeleteSchema = z.object({ incidentId: z.string().min(1) });
-const categorySchema = z.object({ categoryType: z.enum(["equipment", "sops", "incidents", "checklists", "events"]), category: z.string().trim().min(2).max(80) });
-const categoryOrderSchema = z.object({ categoryType: z.enum(["equipment", "sops", "incidents", "checklists", "events"]), categories: z.array(z.string().trim().min(2).max(80)).min(1).max(100) });
+const categorySchema = z.object({ categoryType: z.enum(["equipment", "sops", "incidents", "checklists", "events", "production_roles"]), category: z.string().trim().min(2).max(80) });
+const categoryOrderSchema = z.object({ categoryType: z.enum(["equipment", "sops", "incidents", "checklists", "events", "production_roles"]), categories: z.array(z.string().trim().min(2).max(80)).min(1).max(100) });
 const serviceHistorySchema = z.object({ assignmentId: z.string().min(1) });
 const resetMemberHistorySchema = z.object({ userId: z.string().min(1) });
 const timeAlarmSchema = z.object({
@@ -69,7 +69,8 @@ const sopContentBlockSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("image"), path: z.string().max(500).optional(), dataUrl: z.string().startsWith("data:image/").max(3_000_000).optional(), alt: z.string().max(240).default("") }).refine((value) => Boolean(value.path) !== Boolean(value.dataUrl), "Each SOP image needs one uploaded photo."),
 ]);
 const richSopSchema = z.object({ sopId: z.string().uuid().optional(), title: z.string().trim().min(3).max(120), category: z.string().trim().min(1).max(80), purpose: z.string().trim().max(2000).default(""), content: z.array(sopContentBlockSchema).min(1).max(200), assignedUserIds: z.array(z.string().min(1)).max(100).default([]), availableToAll: z.boolean().default(true) });
-const defaultCategories: NonNullable<AppData["categories"]> = { equipment: ["Camera", "Audio", "Wiring", "Video", "Lighting", "Other"], sops: ["Production", "Audio", "Video", "Livestream & recording", "Equipment", "Operations", "Safety"], incidents: ["Equipment damage", "Audio issue", "Video issue", "Stream interruption", "Recording issue", "Network", "Other"], checklists: [...CHECKLIST_PROGRAM_PHASES], events: ["Happy", "Sad", "General"] };
+const defaultCategories: NonNullable<AppData["categories"]> = { equipment: ["Camera", "Audio", "Wiring", "Video", "Lighting", "Other"], sops: ["Production", "Audio", "Video", "Livestream & recording", "Equipment", "Operations", "Safety"], incidents: ["Equipment damage", "Audio issue", "Video issue", "Stream interruption", "Recording issue", "Network", "Other"], checklists: [...CHECKLIST_PROGRAM_PHASES], events: ["Happy", "Sad", "General"], productionRoles: ["Camera Operator", "PTZ Camera Operator", "Video Operator", "Audio Operator", "Equipment Manager", "Photography", "Video Switcher Operator", "Videography", "Director"] };
+const categoryDataKey = { equipment: "equipment", sops: "sops", incidents: "incidents", checklists: "checklists", events: "events", production_roles: "productionRoles" } as const;
 function checklistPhases(data: AppData) { return orderChecklistProgramPhases(data.categories?.checklists); }
 function validateChecklistPhase(data: AppData, phase: string) {
   if (!checklistPhases(data).some((current) => current === phase)) throw new AppError("Choose one of the five program phases.");
@@ -279,7 +280,8 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         if (!mayManageCategories(user.accessRoles ?? user.role)) throw new AppError("Only the administrator, director, or equipment manager can manage categories.", 403);
         if (values.categoryType === "checklists") throw new AppError("The five checklist phases cannot be added or removed. You can change their order.");
         data.categories ??= structuredClone(defaultCategories);
-        const categories = data.categories[values.categoryType];
+        data.categories.productionRoles ??= [...defaultCategories.productionRoles];
+        const categories = data.categories[categoryDataKey[values.categoryType]];
         if (action === "add_category") {
           if (categories.some((category) => category.toLocaleLowerCase() === values.category.toLocaleLowerCase())) throw new AppError("That category already exists.", 409);
           categories.push(values.category);
@@ -297,10 +299,12 @@ async function runDemo(action: string, payload: Record<string, unknown>, user: {
         const values = record(categoryOrderSchema, p);
         if (!mayManageCategories(user.accessRoles ?? user.role)) throw new AppError("Only the administrator, director, or equipment manager can manage categories.", 403);
         data.categories ??= structuredClone(defaultCategories);
+        data.categories.productionRoles ??= [...defaultCategories.productionRoles];
         if (values.categoryType === "checklists" && (values.categories.length !== CHECKLIST_PROGRAM_PHASES.length || CHECKLIST_PROGRAM_PHASES.some((phase) => !values.categories.includes(phase)))) throw new AppError("Keep all five program phases when changing their order.", 409);
-        const existing = data.categories[values.categoryType];
+        const categoryKey = categoryDataKey[values.categoryType];
+        const existing = data.categories[categoryKey];
         if (values.categories.length !== existing.length || new Set(values.categories).size !== existing.length || existing.some((category) => !values.categories.includes(category))) throw new AppError("The category list changed. Reload it and try again.", 409);
-        data.categories[values.categoryType] = values.categories;
+        data.categories[categoryKey] = values.categories;
         audit(data, user.id, `Reordered ${values.categoryType} categories`, "category", values.categoryType);
         return { ok: true };
       }

@@ -4,8 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import NextImage from "next/image";
 import {
   Activity, AlarmClock, AlertTriangle, ArrowDownToLine, ArrowRight, Bell, BookOpen, CalendarDays, Check,
-  CheckCircle2, ChevronDown, ClipboardCheck, Clock3, FileText, HardDrive, Headphones, ImagePlus, LayoutDashboard,
-  LogOut, Menu, MessageCircle, Moon, Paperclip, Pencil, Plus, Radio, Reply, Search, Send, Settings2, ShieldCheck, Sparkles, Sun, Trash2, Users, Video, Wrench, X,
+  CheckCircle2, ChevronDown, ClipboardCheck, Clock3, FileText, GripHorizontal, HardDrive, Headphones, ImagePlus, LayoutDashboard,
+  LogOut, Menu, MessageCircle, Moon, MoreVertical, Paperclip, Pencil, Plus, Radio, Reply, Search, Send, Settings2, ShieldCheck, Sparkles, Sun, Trash2, Users, Video, Wrench, X,
 } from "lucide-react";
 import { can, eventReadiness } from "@/lib/policy.mjs";
 import { CHECKLIST_PROGRAM_PHASES, normalizeChecklistProgramPhase, orderChecklistProgramPhases } from "@/lib/checklist-phases.mjs";
@@ -21,11 +21,11 @@ type ModalState = { type: string; id?: string; member?: TeamAccount; username?: 
 const accessRoles: AppRole[] = ["Administrator", "Director", "Videographer", "Video Switcher Operator", "Camera Operator", "PTZ Camera Operator", "Audio Operator", "Equipment Manager", "Video Operator", "Photography"];
 
 const productionPositions = ["Camera Operator", "PTZ Camera Operator", "Video Operator", "Audio Operator", "Equipment Manager", "Photography", "Video Switcher Operator", "Videography", "Director"];
-const categoryDefaults = { events: ["Happy", "Sad", "General"], equipment: ["Camera", "Audio", "Wiring", "Video", "Lighting", "Other"], incidents: ["Equipment damage", "Audio issue", "Video issue", "Stream interruption", "Recording issue", "Network", "Other"], checklists: [...CHECKLIST_PROGRAM_PHASES], sops: ["Production", "Audio", "Video", "Livestream & recording", "Equipment", "Operations", "Safety"] };
+const categoryDefaults = { events: ["Happy", "Sad", "General"], equipment: ["Camera", "Audio", "Wiring", "Video", "Lighting", "Other"], incidents: ["Equipment damage", "Audio issue", "Video issue", "Stream interruption", "Recording issue", "Network", "Other"], checklists: [...CHECKLIST_PROGRAM_PHASES], sops: ["Production", "Audio", "Video", "Livestream & recording", "Equipment", "Operations", "Safety"], productionRoles: [...productionPositions] };
 
-function selectedProductionRoles(value?: string) {
+function selectedProductionRoles(value?: string, roles: string[] = productionPositions) {
   const selected = new Set((value ?? "").split(/\s*[·,;]\s*/).map((role) => role.trim() === "Videographer" ? "Videography" : role.trim()).filter(Boolean));
-  return productionPositions.filter((role) => selected.has(role));
+  return roles.filter((role) => selected.has(role));
 }
 
 const teamInvitePresets: { id: string; fullName: string; username: string; productionRoles: string[]; accessRoles: AppRole[] }[] = [
@@ -277,6 +277,14 @@ export function OperationsApp() {
   const darkMode = useSyncExternalStore(subscribeToTheme, getStoredDarkMode, () => false);
 
   useEffect(() => {
+    const target = new URLSearchParams(window.location.search).get("open");
+    if (target === "chat" || target === "time") {
+      setPage(target);
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+  }, []);
+
+  useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
       try {
         const saved = window.localStorage.getItem("iac-alarm-widget-position");
@@ -293,7 +301,7 @@ export function OperationsApp() {
       const widget = document.querySelector<HTMLButtonElement>(".alarm-countdown-widget");
       if (!widget) return;
       const rect = widget.getBoundingClientRect();
-      const bottomClearance = page === "chat" ? 116 : 8;
+      const bottomClearance = page === "chat" ? 184 : 8;
       const position = {
         left: Math.min(Math.max(8, alarmWidgetPosition.left), Math.max(8, window.innerWidth - rect.width - 8)),
         top: Math.min(Math.max(8, alarmWidgetPosition.top), Math.max(8, window.innerHeight - rect.height - bottomClearance)),
@@ -321,7 +329,7 @@ export function OperationsApp() {
     if (!drag.moved) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const left = Math.min(Math.max(8, drag.left + dx), Math.max(8, window.innerWidth - rect.width - 8));
-    const bottomClearance = page === "chat" ? 116 : 8;
+    const bottomClearance = page === "chat" ? 184 : 8;
     const top = Math.min(Math.max(8, drag.top + dy), Math.max(8, window.innerHeight - rect.height - bottomClearance));
     setAlarmWidgetPosition({ left, top });
   };
@@ -335,7 +343,7 @@ export function OperationsApp() {
       const dx = event.clientX - drag.startX; const dy = event.clientY - drag.startY;
       const position = {
         left: Math.min(Math.max(8, drag.left + dx), Math.max(8, window.innerWidth - rect.width - 8)),
-        top: Math.min(Math.max(8, drag.top + dy), Math.max(8, window.innerHeight - rect.height - (page === "chat" ? 116 : 8))),
+        top: Math.min(Math.max(8, drag.top + dy), Math.max(8, window.innerHeight - rect.height - (page === "chat" ? 184 : 8))),
       };
       setAlarmWidgetPosition(position);
       try { window.localStorage.setItem("iac-alarm-widget-position", JSON.stringify(position)); } catch { /* Position remains movable for this session. */ }
@@ -545,6 +553,8 @@ export function OperationsApp() {
     if (!("serviceWorker" in navigator)) return;
     const onServiceWorkerMessage = (event: MessageEvent<{ type?: string }>) => {
       if (event.data?.type === "alarm-completed") void load();
+      if (event.data?.type === "open-chat") setPage("chat");
+      if (event.data?.type === "open-time") setPage("time");
     };
     navigator.serviceWorker.addEventListener("message", onServiceWorkerMessage);
     return () => navigator.serviceWorker.removeEventListener("message", onServiceWorkerMessage);
@@ -622,7 +632,7 @@ export function OperationsApp() {
     const values = Object.fromEntries(formData.entries()) as Record<string, unknown>;
     if (action === "team_invite" || action === "team_update_member" || action === "team_update_roles") {
       values.accessRoles = formData.getAll("accessRoles");
-      if (action !== "team_update_roles") values.jobTitle = formData.getAll("productionRoles").filter((value): value is string => typeof value === "string" && productionPositions.includes(value)).join(" · ");
+      if (action !== "team_update_roles") values.jobTitle = formData.getAll("productionRoles").filter((value): value is string => typeof value === "string" && (payload?.data.categories?.productionRoles ?? productionPositions).includes(value)).join(" · ");
     }
         if (action === "create_event" || action === "update_event") {
       values.assignedUserIds = formData.getAll("assignedUserIds");
@@ -797,6 +807,7 @@ export function OperationsApp() {
     {nextPersonalAlarm && alarmDisplayNow > 0 && <button type="button" className={`alarm-countdown-widget ${page === "chat" ? "is-over-chat" : ""} ${personalAlarmOverdue ? "is-overdue" : ""} ${personalAlarmNearDue ? "is-near-due" : ""} ${personalAlarmCritical ? "is-critical" : ""}`} style={{ "--alarm-hue": alarmCountdownHue(personalAlarmRemainingMs), ...(alarmWidgetPosition ? { left: alarmWidgetPosition.left, top: alarmWidgetPosition.top, right: "auto", bottom: "auto" } : {}) } as CSSProperties} onPointerDown={startAlarmWidgetDrag} onPointerMove={moveAlarmWidget} onPointerUp={endAlarmWidgetDrag} onPointerCancel={endAlarmWidgetDrag} onClick={() => { if (alarmClickSuppressed.current) return; setPage("time"); }} aria-label={`${personalAlarmOverdue ? "Overdue alarm" : "Alarm countdown"}: ${nextPersonalAlarm.description}. Drag to move.`}>
       <span className="alarm-countdown-widget-icon"><AlarmClock size={19} /></span>
       <span className="alarm-countdown-widget-copy"><small>{personalAlarmOverdue ? "ALARM OVERDUE" : "TIME REMAINING"}</small><strong>{nextPersonalAlarm.description}</strong><em style={{ "--alarm-hue": alarmCountdownHue(personalAlarmRemainingMs) } as CSSProperties}>{personalAlarmOverdue ? "Task needs completion" : formatAlarmCountdown(nextPersonalAlarm.fireAt, alarmDisplayNow)}</em></span>
+      <span className="alarm-drag-handle" aria-hidden="true"><GripHorizontal size={14} /><small>Move</small></span>
       <ArrowRight size={16} />
     </button>}
     {visibleNotificationAlert?.alarmId ? <div key={visibleNotificationAlert.id} className="notification-arrival alarm-notification-arrival" role="status"><span className="notification-arrival-icon"><AlarmClock size={25} /></span><span><strong>Alarm is due</strong><small>{visibleNotificationAlert.detail} · Complete the task to stop reminders.</small></span><button className="button button-primary alarm-arrival-complete" type="button" onClick={() => { setNotificationAlert(null); void doAction("complete_time_alarm", { alarmId: visibleNotificationAlert.alarmId }); }}>Task completed</button></div> : visibleNotificationAlert && <button type="button" key={visibleNotificationAlert.id} className="notification-arrival" role="status" onClick={() => { setPage("notifications"); setNotificationAlert(null); }}><span className="notification-arrival-icon"><Bell size={24} /></span><span><strong>New notification</strong><small>{visibleNotificationAlert.title} · {visibleNotificationAlert.detail}</small></span><span className="notification-arrival-action">View</span></button>}
@@ -968,6 +979,20 @@ function ChatAttachmentPreview({ attachment, onOpenImage }: { attachment: ChatAt
   if (type.startsWith("audio/")) return <audio className="chat-attachment-audio" controls preload="metadata" src={source}>{name}</audio>;
   return <a className="chat-attachment-file" href={source} target="_blank" rel="noreferrer"><FileText size={17} /><span><strong>{name}</strong><small>{size ? formatFileSize(size) : "File attachment"}</small></span><ArrowDownToLine size={14} /></a>;
 }
+
+function decodePushKey(key: string) {
+  const normalized = key.replace(/-/g, "+").replace(/_/g, "/");
+  const binary = window.atob(normalized + "=".repeat((4 - normalized.length % 4) % 4));
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function ChatMessageText({ body, members }: { body: string; members: ChatMember[] }) {
+  const names = members.map((member) => member.fullName).filter(Boolean).sort((a, b) => b.length - a.length);
+  if (!names.length) return <p>{body}</p>;
+  const pattern = new RegExp(`(@(?:${names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b)`, "g");
+  return <p>{body.split(pattern).map((part, index) => part.startsWith("@") ? <strong className="chat-mention-text" key={`${index}-${part}`}>{part}</strong> : part)}</p>;
+}
+
 function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mode"] }) {
   const [conversationType, setConversationType] = useState<"all" | "direct">("all");
   const [recipientId, setRecipientId] = useState("");
@@ -981,8 +1006,17 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
+  const [unreadCounts, setUnreadCounts] = useState<{ all: number; direct: Record<string, number> }>({ all: 0, direct: {} });
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [pushAvailable, setPushAvailable] = useState(false);
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushMessage, setPushMessage] = useState("");
   const sendingRef = useRef(false);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const imagePreviewCloseRef = useRef<HTMLButtonElement>(null);
   const imagePreviewReturnFocusRef = useRef<HTMLElement | null>(null);
   const shouldScrollToBottom = useRef(true);
@@ -991,6 +1025,7 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
   const [freshMessageIds, setFreshMessageIds] = useState<Set<string>>(() => new Set());
   const freshMessageTimer = useRef<number | null>(null);
   const recipient = members.find((member) => member.id === recipientId);
+  const mentionCandidates = members.filter((member) => (!mentionQuery || member.fullName.toLocaleLowerCase().includes(mentionQuery.toLocaleLowerCase())) && (conversationType !== "direct" || member.id === recipientId)).slice(0, 6);
   const replyAuthor = replyTo ? replyTo.senderId === user.id ? "You" : members.find((member) => member.id === replyTo.senderId)?.fullName ?? "Team member" : "";
 
   const openImagePreview = (src: string, name: string) => {
@@ -1071,6 +1106,40 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
   }, [conversationType, recipientId]);
 
   useEffect(() => {
+    let active = true;
+    const refreshUnread = async () => {
+      try {
+        const response = await fetch("/api/chat?summary=1&unread=1", { cache: "no-store" });
+        if (!response.ok) return;
+        const result = await response.json() as { all?: number; direct?: Record<string, number> };
+        if (active) setUnreadCounts({ all: result.all ?? 0, direct: result.direct ?? {} });
+      } catch { /* The current conversation remains usable while unread counts refresh. */ }
+    };
+    void refreshUnread();
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible") void refreshUnread(); }, 3_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [user.id]);
+
+  useEffect(() => {
+    let active = true;
+    const checkPush = async () => {
+      if (mode !== "supabase" || !("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return;
+      try {
+        const response = await fetch("/api/chat/push", { cache: "no-store" });
+        const result = await response.json() as { available?: boolean };
+        if (!active) return;
+        setPushAvailable(Boolean(result.available));
+        if (result.available) {
+          const registration = await navigator.serviceWorker.ready;
+          setPushEnabled(Boolean(await registration.pushManager.getSubscription()));
+        }
+      } catch { /* Phone push remains optional if this device or server cannot register it. */ }
+    };
+    void checkPush();
+    return () => { active = false; };
+  }, [mode]);
+
+  useEffect(() => {
     if (!shouldScrollToBottom.current) return;
     shouldScrollToBottom.current = false;
     const container = messagesRef.current;
@@ -1083,6 +1152,77 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
     isAtBottom.current = container.scrollHeight - container.clientHeight - container.scrollTop < 72;
   };
 
+  const updateMentionQuery = (value: string, cursor: number) => {
+    const before = value.slice(0, cursor);
+    const trigger = before.match(/(?:^|\s)@([\p{L}\p{N} .'-]*)$/u);
+    setMentionQuery(trigger ? trigger[1].trimStart() : null);
+  };
+
+  const insertMention = (member: ChatMember) => {
+    const input = messageInputRef.current;
+    const cursor = input?.selectionStart ?? draft.length;
+    const before = draft.slice(0, cursor);
+    const match = before.match(/(?:^|\s)@([\p{L}\p{N} .'-]*)$/u);
+    if (!match) return;
+    const start = before.length - match[0].length + match[0].lastIndexOf("@");
+    const value = `${draft.slice(0, start)}@${member.fullName} ${draft.slice(cursor)}`;
+    setDraft(value);
+    setMentionQuery(null);
+    requestAnimationFrame(() => {
+      const nextCursor = start + member.fullName.length + 2;
+      messageInputRef.current?.focus();
+      messageInputRef.current?.setSelectionRange(nextCursor, nextCursor);
+    });
+  };
+
+  const saveMessageEdit = async (event: FormEvent<HTMLFormElement>, messageId: string) => {
+    event.preventDefault();
+    const body = editDraft.trim();
+    if (!body) return;
+    try {
+      const response = await fetch("/api/chat", { method: "PATCH", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messageId, body }) });
+      const result = await response.json() as { message?: ChatMessage; error?: string; warning?: string };
+      if (!response.ok || !result.message) throw new Error(result.error || "Message could not be edited.");
+      setMessages((current) => current.map((message) => message.id === messageId ? { ...result.message!, receipts: message.receipts } : message));
+      setEditingMessageId(null);
+      setEditDraft("");
+      if (result.warning) setError(result.warning);
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Message could not be edited."); }
+  };
+
+  const enablePhoneAlerts = async () => {
+    setPushBusy(true); setPushMessage("");
+    try {
+      if (Notification.permission === "denied") throw new Error("Notifications are blocked in this device’s browser settings.");
+      const permission = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
+      if (permission !== "granted") throw new Error("Allow notifications to receive @mention alerts on this device.");
+      const keyResponse = await fetch("/api/chat/push", { cache: "no-store" });
+      const keyResult = await keyResponse.json() as { publicKey?: string; available?: boolean };
+      if (!keyResponse.ok || !keyResult.publicKey) throw new Error("Phone alerts are not configured on the app yet.");
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: decodePushKey(keyResult.publicKey) });
+      const response = await fetch("/api/chat/push", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(subscription.toJSON()) });
+      const result = await response.json() as { error?: string };
+      if (!response.ok) throw new Error(result.error || "This device could not be registered.");
+      setPushEnabled(true); setPushMessage("This device will show @mention alerts when the app is closed.");
+    } catch (cause) { setPushMessage(cause instanceof Error ? cause.message : "Phone alerts could not be enabled."); }
+    finally { setPushBusy(false); }
+  };
+
+  const disablePhoneAlerts = async () => {
+    setPushBusy(true); setPushMessage("");
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        await fetch("/api/chat/push", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ endpoint: subscription.endpoint }) });
+        await subscription.unsubscribe();
+      }
+      setPushEnabled(false);
+    } catch (cause) { setPushMessage(cause instanceof Error ? cause.message : "Phone alerts could not be disabled."); }
+    finally { setPushBusy(false); }
+  };
+
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const body = draft.trim();
@@ -1092,7 +1232,7 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
     setError("");
     try {
       const response = await fetch("/api/chat", { method: "POST", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conversationType, recipientId: conversationType === "direct" ? recipientId : undefined, body, replyToId: replyTo?.id, attachments: pendingAttachments }) });
-      const result = await response.json() as { message?: ChatMessage; error?: string };
+      const result = await response.json() as { message?: ChatMessage; error?: string; warning?: string };
       if (!response.ok || !result.message) throw new Error(result.error || "Message could not be sent.");
       knownMessageIds.current?.add(result.message.id);
       setFreshMessageIds((current) => new Set([...current, result.message!.id]));
@@ -1104,6 +1244,8 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
       setDraft("");
       setPendingAttachments([]);
       setReplyTo(null);
+      setMentionQuery(null);
+      if (result.warning) setError(result.warning);
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Message could not be sent."); }
     finally { sendingRef.current = false; setSending(false); }
   };
@@ -1135,10 +1277,11 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
 
   return <>
     <section className="panel crew-chat-panel">
-      <div className="crew-chat-toolbar">
-        <button type="button" className={`crew-chat-room-button ${conversationType === "all" ? "is-active" : ""}`} onClick={() => { setMessages([]); setFreshMessageIds(new Set()); setLoading(true); setConversationType("all"); setRecipientId(""); setReplyTo(null); }}><Users size={16} /><span><strong>All chat</strong><small>Everyone on the crew</small></span></button>
-        <label className="form-field crew-chat-recipient"><span>Choose someone to talk to</span><select value={recipientId} onChange={(event) => { const selectedId = event.currentTarget.value; setMessages([]); setFreshMessageIds(new Set()); setLoading(true); setRecipientId(selectedId); setConversationType(selectedId ? "direct" : "all"); setReplyTo(null); }}><option value="">Select a team member…</option>{members.map((member) => <option key={member.id} value={member.id}>{member.fullName} · {member.jobTitle || member.role}</option>)}</select></label>
-      </div>
+      <div className="crew-chat-toolbar"><div className="crew-chat-rooms" role="tablist" aria-label="Chat conversations">
+        <button type="button" role="tab" aria-selected={conversationType === "all"} className={`crew-chat-room-button ${conversationType === "all" ? "is-active" : ""}`} onClick={() => { setMessages([]); setFreshMessageIds(new Set()); setLoading(true); setConversationType("all"); setRecipientId(""); setReplyTo(null); }}><Users size={16} /><span><strong>All chat</strong><small>Everyone on the crew</small></span>{unreadCounts.all > 0 && <b className="chat-unread-count">{unreadCounts.all > 99 ? "99+" : unreadCounts.all}</b>}</button>
+        {members.map((member) => { const unread = unreadCounts.direct[member.id] ?? 0; const active = conversationType === "direct" && recipientId === member.id; return <button type="button" role="tab" aria-selected={active} className={`crew-chat-room-button crew-chat-person-room ${active ? "is-active" : ""}`} key={member.id} onClick={() => { setMessages([]); setFreshMessageIds(new Set()); setLoading(true); setRecipientId(member.id); setConversationType("direct"); setReplyTo(null); }}><ProfileAvatar name={member.fullName} src={member.avatarUrl} className="chat-room-avatar" /><span><strong>{member.fullName}</strong><small>{member.jobTitle || member.role}</small></span>{unread > 0 && <b className="chat-unread-count">{unread > 99 ? "99+" : unread}</b>}</button>; })}
+      </div></div>
+      {mode === "supabase" && <div className="chat-alert-settings"><div><strong>Phone and device alerts</strong><small>{pushEnabled ? "This device is registered for new @mentions." : "Get a device notification when someone @mentions you, even when the app is closed."}</small></div>{pushAvailable && <button type="button" className="button button-small button-quiet" disabled={pushBusy} onClick={() => void (pushEnabled ? disablePhoneAlerts() : enablePhoneAlerts())}>{pushBusy ? "Saving…" : pushEnabled ? "Turn off" : "Enable phone alerts"}</button>}</div>}{pushMessage && <p className="chat-push-status" role="status">{pushMessage}</p>}
       <div className="crew-chat-heading"><div>{conversationType === "all" ? <><span className="eyebrow">TEAM ROOM</span><h3>All chat</h3></> : <><ProfileAvatar name={recipient?.fullName ?? "Team member"} src={recipient?.avatarUrl} className="chat-heading-avatar" /><span><h3>{recipient?.fullName ?? "Direct chat"}</h3><small>{recipient?.jobTitle || recipient?.role || "Team member"}</small></span></>}</div><span className="chat-live-indicator"><i />Updates automatically</span></div>
       <div ref={messagesRef} onScroll={updateScrollPosition} className="crew-chat-messages" aria-live="polite" aria-label={conversationType === "all" ? "All crew messages" : `Messages with ${recipient?.fullName ?? "team member"}`}>
         {conversationType === "direct" && !recipientId ? <div className="crew-chat-empty">Choose a team member to start a direct chat.</div> : loading ? <div className="crew-chat-empty">Loading messages…</div> : messages.length ? messages.map((message) => {
@@ -1152,9 +1295,9 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
             <ProfileAvatar name={author?.fullName ?? "Team member"} src={author?.avatarUrl} className="chat-avatar" />
              <div className="chat-message-content"><div className="chat-message-meta"><strong>{isOwn ? "You" : author?.fullName ?? "Team member"}</strong><time dateTime={message.createdAt}>{formatStamp(message.createdAt)}</time></div>
                {message.reply && <div className="chat-reply-quote"><strong>{message.reply.senderId === user.id ? "You" : members.find((member) => member.id === message.reply?.senderId)?.fullName ?? "Team member"}</strong><span>{message.reply.body || "Attachment"}</span></div>}
-               {message.body && <p>{message.body}</p>}
+                {message.body && (editingMessageId === message.id ? <form className="chat-message-edit-form" onSubmit={(event) => void saveMessageEdit(event, message.id)}><textarea aria-label="Edit message" maxLength={2000} value={editDraft} onChange={(event) => setEditDraft(event.currentTarget.value)} autoFocus /><div><button type="button" className="button button-small button-quiet" onClick={() => { setEditingMessageId(null); setEditDraft(""); }}>Cancel</button><button type="submit" className="button button-small button-primary" disabled={!editDraft.trim()}>Save edit</button></div></form> : <ChatMessageText body={message.body} members={members} />)}
                {message.attachments?.length ? <div className="chat-attachment-list">{message.attachments.map((attachment, index) => <ChatAttachmentPreview attachment={attachment} onOpenImage={openImagePreview} key={`${message.id}-file-${index}`} />)}</div> : null}
-               <div className="chat-message-footer"><button type="button" className="chat-reply-button" onClick={() => setReplyTo(message)}><Reply size={13} />Reply</button>{isOwn && <details className="chat-reader-details"><summary className="chat-readers" aria-label={`${seenMembers.length} seen, ${unseenMembers.length} not seen`}>{seenMembers.slice(0, 8).map((reader) => <ProfileAvatar key={reader.id} name={reader.fullName} src={reader.avatarUrl} className="chat-reader-avatar" />)}<small>{seenMembers.length ? `${seenMembers.length} seen` : "Sent"}</small></summary><div className="chat-reader-popover"><div><strong>Seen</strong><span>{seenMembers.map((reader) => reader.fullName).join(", ") || "No one yet"}</span></div><div><strong>Not seen</strong><span>{unseenMembers.map((reader) => reader.fullName).join(", ") || "Everyone has seen it"}</span></div></div></details>}</div>
+                <div className="chat-message-footer"><button type="button" className="chat-reply-button" onClick={() => setReplyTo(message)}><Reply size={13} />Reply</button>{message.editedAt && <small className="chat-edited-label">Edited</small>}{isOwn && <><details className="chat-message-menu"><summary className="icon-button" aria-label="Message options"><MoreVertical size={15} /></summary><div><button type="button" onClick={(event) => { const menu = event.currentTarget.closest("details"); if (menu) menu.open = false; setEditingMessageId(message.id); setEditDraft(message.body); }}>Edit message</button></div></details><details className="chat-reader-details"><summary className="chat-readers" aria-label={`${seenMembers.length} seen, ${unseenMembers.length} not seen`}>{seenMembers.slice(0, 3).map((reader) => <ProfileAvatar key={reader.id} name={reader.fullName} src={reader.avatarUrl} className="chat-reader-avatar" />)}{seenMembers.length > 3 && <span className="chat-reader-overflow">+{seenMembers.length - 3}</span>}<small>{seenMembers.length ? `${seenMembers.length} seen` : "Sent"}</small></summary><div className="chat-reader-popover"><div><strong>Seen</strong><span>{seenMembers.map((reader) => reader.fullName).join(", ") || "No one yet"}</span></div><div><strong>Not seen</strong><span>{unseenMembers.map((reader) => reader.fullName).join(", ") || "Everyone has seen it"}</span></div></div></details></>}</div>
              </div>
           </article>;
         }) : <div className="crew-chat-empty"><MessageCircle size={22} /><strong>{conversationType === "all" ? "Start the crew conversation" : "No messages yet"}<small>Send a message to get the conversation started.</small></strong></div>}
@@ -1162,7 +1305,7 @@ function CrewChatPage({ user, mode }: { user: Profile; mode: SessionContext["mod
       {error && <p className="crew-chat-error" role="alert">{error}</p>}
       {replyTo && <div className="chat-reply-composer"><span><strong>Replying to {replyAuthor}</strong><small>{replyTo.body || "Attachment"}</small></span><button type="button" className="icon-button" onClick={() => setReplyTo(null)} aria-label="Cancel reply"><X size={15} /></button></div>}
       {pendingAttachments.length > 0 && <div className="chat-pending-files">{pendingAttachments.map((attachment, index) => <div className="chat-pending-file" key={`${attachment.name}-${index}`}><span>{attachment.name} · {formatFileSize(attachment.size)}</span><button type="button" className="icon-button" aria-label={`Remove ${attachment.name}`} onClick={() => setPendingAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))}><X size={14} /></button></div>)}</div>}
-      <form className="crew-chat-composer" onSubmit={sendMessage}><label className="chat-attach-button" title="Attach photos, videos, audio, or files"><Paperclip size={18} /><input aria-label="Attach photos, videos, audio, or files" type="file" multiple accept="image/*,video/mp4,video/webm,video/quicktime,audio/mpeg,audio/mp4,.m4a,.mp3,.pdf,.heic,.heif" onChange={attachFiles} /></label><textarea aria-label="Write a message" maxLength={2000} placeholder={conversationType === "direct" && !recipientId ? "Choose a team member first" : "Write a message…"} value={draft} onChange={(event) => setDraft(event.currentTarget.value)} disabled={conversationType === "direct" && !recipientId} /><button className="button button-primary" type="submit" disabled={sending || uploadingFiles || (!draft.trim() && !pendingAttachments.length) || (conversationType === "direct" && !recipientId)}><Send size={15} />{uploadingFiles ? "Uploading…" : sending ? "Sending…" : "Send"}</button></form>
+      <form className="crew-chat-composer" onSubmit={sendMessage}><label className="chat-attach-button" title="Attach photos, videos, audio, or files"><Paperclip size={18} /><input aria-label="Attach photos, videos, audio, or files" type="file" multiple accept=".jpg,.jpeg,.png,.webp,.gif,video/mp4,video/webm,video/quicktime,audio/mpeg,audio/mp4,.m4a,.mp3,.pdf,.heic,.heif" onChange={attachFiles} /></label><div className="chat-composer-textarea-wrap">{mentionQuery !== null && mentionCandidates.length > 0 && <div className="chat-mention-menu" role="listbox" aria-label="Mention a crew member">{mentionCandidates.map((member) => <button type="button" role="option" aria-selected="false" key={member.id} onMouseDown={(event) => event.preventDefault()} onClick={() => insertMention(member)}><ProfileAvatar name={member.fullName} src={member.avatarUrl} className="chat-room-avatar" /><span><strong>{member.fullName}</strong><small>{member.jobTitle || member.role}</small></span></button>)}</div>}<textarea ref={messageInputRef} aria-label="Write a message" maxLength={2000} placeholder={conversationType === "direct" && !recipientId ? "Choose a team member first" : "Write a message… use @name to notify someone"} value={draft} onChange={(event) => { setDraft(event.currentTarget.value); updateMentionQuery(event.currentTarget.value, event.currentTarget.selectionStart); }} onClick={(event) => updateMentionQuery(event.currentTarget.value, event.currentTarget.selectionStart)} disabled={conversationType === "direct" && !recipientId} /></div><button className="button button-primary" type="submit" disabled={sending || uploadingFiles || (!draft.trim() && !pendingAttachments.length) || (conversationType === "direct" && !recipientId)}><Send size={15} />{uploadingFiles ? "Uploading…" : sending ? "Sending…" : "Send"}</button></form>
     </section>
     {imagePreview && <div className="chat-image-lightbox" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setImagePreview(null); }}><section className="chat-image-lightbox-dialog" role="dialog" aria-modal="true" aria-label={`Image preview: ${imagePreview.name}`}><button ref={imagePreviewCloseRef} type="button" className="icon-button chat-image-lightbox-close" aria-label="Close image preview" onClick={() => setImagePreview(null)}><X size={20} /></button><div className="chat-image-lightbox-frame"><NextImage unoptimized fill sizes="92vw" src={imagePreview.src} alt={imagePreview.name} className="chat-image-lightbox-image" /></div><p className="chat-image-lightbox-name">{imagePreview.name}</p></section></div>}
   </>;
@@ -1331,7 +1474,7 @@ function TeamPage({ data, user, context, openModal, refreshKey }: { data: AppDat
   data.profiles.forEach((profile) => (profile.accessRoles ?? [profile.role]).forEach((role) => roleCounts.set(role, (roleCounts.get(role) ?? 0) + 1)));
   const memberRows: TeamAccount[] = accountsReady ? accounts : data.profiles.map((profile) => ({ id: profile.id, fullName: profile.fullName, email: profile.email, username: profile.username ?? "", jobTitle: profile.jobTitle ?? "", avatarUrl: profile.avatarUrl, role: profile.role, accessRoles: profile.accessRoles ?? [profile.role], active: profile.active ?? true, qualification: profile.qualification, lastSignInAt: null }));
   return <><PageIntro title="Team member accounts" detail="Manage team accounts and access roles. Saved passwords are private; administrators can set a new one, and members can change their own." />
-    {canManageAccounts && <div className="team-admin-toolbar"><div><strong>Team accounts</strong><span>{accountsReady ? `${accounts.length} sign-in accounts` : "Account setup"}</span></div><button className="button button-primary" disabled={!accountsReady} title={!accountsReady ? "Connect the account service to invite team members." : undefined} onClick={() => openModal({ type: "invite-member" })}><Plus size={15} />Add member</button></div>}
+    {canManageAccounts && <div className="team-admin-toolbar"><div><strong>Team accounts</strong><span>{accountsReady ? `${accounts.length} sign-in accounts` : "Account setup"}</span></div><div className="team-admin-toolbar-actions">{administrator && <CategoryManagerButton kind="production_roles" openModal={openModal} />}<button className="button button-primary" disabled={!accountsReady} title={!accountsReady ? "Connect the account service to invite team members." : undefined} onClick={() => openModal({ type: "invite-member" })}><Plus size={15} />Add member</button></div></div>}
     {canManageAccounts && !accountsReady && <div className="sop-notice team-account-notice"><ShieldCheck size={17} /><span><strong>Account management is not connected.</strong> Add the server-side account key and apply the team account migration to enable username sign-in and account changes.</span></div>}
     {accountError && <div className="sop-notice team-account-notice"><AlertTriangle size={17} /><span>{accountError}</span></div>}
     <div className="team-role-strip">{accessRoles.map((role) => <div className="team-role-chip" key={role}><strong>{accountsReady ? accounts.filter((item) => (item.accessRoles ?? [item.role]).includes(role)).length : roleCounts.get(role) ?? 0}</strong><span>{role}</span></div>)}</div>
@@ -1361,7 +1504,7 @@ function EquipmentPage({ data, user, searchMatch, openModal, run }: { data: AppD
     <div className="inventory-summary"><div className="inventory-summary-card"><span className="equipment-dot available" /><span>Available stock units</span><strong>{availableUnits}</strong></div><div className="inventory-summary-card"><span className="equipment-dot checked" /><span>Inventory records</span><strong>{data.assets.length}</strong></div><div className="inventory-summary-card"><span className="equipment-dot checked" /><span>Borrowed units</span><strong>{borrowedUnits}</strong></div><div className="inventory-summary-card"><span className="equipment-dot attention" /><span>Attention</span><strong>{data.assets.filter((item) => ["Under maintenance", "Damaged", "Missing"].includes(item.status)).length}</strong></div></div>
     <div className="filter-row equipment-category-filter"><div className="category-tabs" aria-label="Filter equipment by category"><button type="button" className={selectedCategory === "All" ? "active" : ""} aria-pressed={selectedCategory === "All"} onClick={() => setSelectedCategory("All")}>All ({data.assets.length})</button>{equipmentCategories.map((category) => <button type="button" className={selectedCategory === category ? "active" : ""} aria-pressed={selectedCategory === category} key={category} onClick={() => setSelectedCategory(category)}>{category} ({data.assets.filter((asset) => asset.category === category).length})</button>)}</div></div>
     <div className="section-divider-title"><span>Asset register</span><small>{assets.length} records</small>{manage && <CategoryManagerButton kind="equipment" openModal={openModal} />}</div>
-    {assets.length ? <div className="asset-grid">{assets.map((asset) => {
+    {assets.length ? <ShowMoreList items={assets} className="asset-grid" initialCount={10} renderItem={(asset) => {
       const assetLoans = data.loans.filter((item) => item.assetId === asset.id);
       const activeAssetLoans = assetLoans.filter((item) => !item.returnAt);
       const activeBorrowers = activeAssetLoans.map((activeLoan) => ({ loan: activeLoan, profile: data.profiles.find((item) => item.id === activeLoan.borrowerId) }));
@@ -1373,7 +1516,7 @@ function EquipmentPage({ data, user, searchMatch, openModal, run }: { data: AppD
       return <section className="asset-card" key={asset.id}><div className="asset-card-head"><span className="asset-category-icon">{asset.category.toLowerCase().includes("audio") || asset.category.toLowerCase().includes("microphone") ? <Headphones size={19} /> : asset.category.toLowerCase().includes("cable") ? <Wrench size={19} /> : <Video size={19} />}</span><StatusPill tone={displayStatus === "Available" ? "success" : ["Under maintenance", "Damaged", "Missing"].includes(displayStatus) ? "danger" : borrowedQuantity > 0 ? "warning" : "neutral"}>{displayStatus}</StatusPill></div><span className="asset-code">{asset.assetCode} · {asset.category}</span><h3>{asset.name}</h3><div className="asset-spec-row"><span><small>LOCATION</small>{asset.location || "Not recorded"}</span><span><small>CONDITION</small>{asset.condition}</span><span><small>STOCK</small>{totalQuantity} total · {borrowedQuantity} borrowed · {availableQuantity} available</span></div>{asset.model && <p className="asset-notes">{asset.model}{asset.notes ? " · " + asset.notes : ""}</p>}{activeBorrowers.length > 0 && <div className="asset-borrowers"><div className="asset-borrowers-heading"><Users size={14} /><strong>Checked out by</strong></div>{activeBorrowers.map(({ loan: activeLoan, profile }) => <div className="asset-borrower" key={activeLoan.id}><span><strong>{profile?.fullName ?? "Team member"}</strong><small>{activeLoan.quantity ?? 1} unit{(activeLoan.quantity ?? 1) === 1 ? "" : "s"} · {formatStamp(activeLoan.issuedAt)}</small>{activeLoan.checkoutNotes && <small>Handoff details: {activeLoan.checkoutNotes}</small>}</span></div>)}</div>}
         {(manage || admin || (isAdministrator && assetLoans.length > 0)) && <div className="asset-actions">{manage && availableQuantity > 0 && <button className="button button-small button-primary" onClick={() => openModal({ type: "checkout-equipment", id: asset.id })}><ArrowDownToLine size={14} />Log handoff</button>}{manage && activeAssetLoans.map((activeLoan) => { const borrowerName = data.profiles.find((person) => person.id === activeLoan.borrowerId)?.fullName ?? "team member"; return <button key={activeLoan.id} className="button button-small button-quiet" title={`Record return for ${borrowerName}`} onClick={() => openModal({ type: "return-equipment", id: activeLoan.id })}>Return · {borrowerName}</button>; })}{admin && <button className="button button-small button-quiet" onClick={() => openModal({ type: "edit-asset", id: asset.id })}>Edit asset</button>}{isAdministrator && assetLoans.length > 0 && <button className="button button-small button-quiet danger-text" disabled={hasActiveAssetLoan} title={hasActiveAssetLoan ? "Return all current loans before deleting history" : "Delete all borrowing history for this item"} onClick={() => { if (window.confirm(`Delete all ${assetLoans.length} borrowing history record${assetLoans.length === 1 ? "" : "s"} for ${asset.name}? This cannot be undone.`)) void run("delete_equipment_history", { assetId: asset.id }); }}>Delete all history</button>}</div>}
       </section>;
-    })}</div> : <EmptyState icon={HardDrive} title={selectedCategory === "All" ? "No equipment to show" : `No ${selectedCategory} equipment to show`} detail={manage ? "Add inventory records or adjust your search." : "No equipment loans are linked to your account yet."} />}
+    }} /> : <EmptyState icon={HardDrive} title={selectedCategory === "All" ? "No equipment to show" : `No ${selectedCategory} equipment to show`} detail={manage ? "Add inventory records or adjust your search." : "No equipment loans are linked to your account yet."} />}
     <div className="section-divider-title loan-history-title"><span>Borrowing history</span><small>Person, handoff, and return records</small></div>
     {data.loans.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>ASSET</th><th>QUANTITY</th><th>BORROWER</th><th>ISSUED BY</th><th>HANDOFF / DUE</th><th>RETURN INSPECTION</th><th>STATE</th>{isAdministrator && <th>ADMIN ACTIONS</th>}</tr></thead><tbody>{[...data.loans].sort((a, b) => b.issuedAt.localeCompare(a.issuedAt)).map((item) => { const asset = data.assets.find((row) => row.id === item.assetId); const borrower = data.profiles.find((row) => row.id === item.borrowerId); const issuer = data.profiles.find((row) => row.id === item.issuedBy); return <tr key={item.id}><td><strong>{asset?.name ?? "Equipment"}</strong><small className="table-subline">{asset?.assetCode}</small></td><td>{item.quantity ?? 1}</td><td>{borrower?.fullName ?? "Team member"}<small className="table-subline">{borrower?.role}</small></td><td>{issuer?.fullName ?? "Checkout crew"}</td><td>{formatStamp(item.issuedAt)}<small className="table-subline">{item.dueDate ? "Due " + displayDate(item.dueDate) : "No due date"}</small><small className="table-subline">{item.checkoutNotes || "No handoff notes"}</small></td><td>{item.returnAt ? formatStamp(item.returnAt) + " · " + item.returnCondition : "Not returned"}<small className="table-subline">{item.returnNotes ?? ""}</small></td><td><StatusPill tone={item.returnAt ? "success" : "warning"}>{item.returnAt ? "Returned" : "Borrowed"}</StatusPill></td>{isAdministrator && <td><button className="button button-small button-quiet danger-text" disabled={!item.returnAt} title={!item.returnAt ? "Record the equipment return before deleting its history" : "Delete this borrowing history record"} aria-label={`Delete history for ${asset?.name ?? "equipment"} borrowed by ${borrower?.fullName ?? "team member"}`} onClick={() => { if (window.confirm(`Delete the borrowing history for ${asset?.name ?? "this equipment"} borrowed by ${borrower?.fullName ?? "this team member"}? This cannot be undone.`)) void run("delete_equipment_history", { assetId: item.assetId, loanId: item.id }); }}>Delete record</button></td>}</tr>; })}</tbody></table></div> : <div className="subtle-empty">No equipment has been handed out yet.</div>}
   </>;
@@ -1612,8 +1755,14 @@ function IncidentPhotosField({ initialValue = [] }: { initialValue?: string[] })
   return <div className="incident-photo-field"><label className="button button-small button-quiet"><Plus size={14} />Add photos<input type="file" accept="image/*" multiple onChange={(event) => void addPhotos(event)} /></label><span className="form-hint">Up to 5 photos. Photos are resized before saving.</span>{error && <span className="field-error">{error}</span>}<div className="incident-photo-previews">{photos.map((photo, index) => <div className="incident-photo-preview" key={`${index}-${photo.slice(-12)}`}><NextImage unoptimized src={photo} alt={`Incident attachment ${index + 1}`} width={76} height={64} /><button type="button" className="icon-button" aria-label="Remove photo" title="Remove photo" onClick={() => setPhotos((current) => current.filter((_, photoIndex) => photoIndex !== index))}><X size={13} /></button><input type="hidden" name="photos" value={photo} /></div>)}</div></div>;
 }
 
-function CategoryManagerButton({ kind, openModal }: { kind: "equipment" | "sops" | "incidents" | "checklists" | "events"; openModal: (state: ModalState) => void }) {
-  return <button type="button" className="button button-small button-quiet category-manage-button" onClick={() => openModal({ type: "manage-categories", id: kind })}>{kind === "checklists" ? "Order phases" : "Edit categories"}</button>;
+function CategoryManagerButton({ kind, openModal }: { kind: "equipment" | "sops" | "incidents" | "checklists" | "events" | "production_roles"; openModal: (state: ModalState) => void }) {
+  return <button type="button" className="button button-small button-quiet category-manage-button" onClick={() => openModal({ type: "manage-categories", id: kind })}>{kind === "checklists" ? "Order phases" : kind === "production_roles" ? "Manage production roles" : "Edit categories"}</button>;
+}
+
+function ShowMoreList<T>({ items, initialCount = 8, className, renderItem }: { items: T[]; initialCount?: number; className: string; renderItem: (item: T, index: number) => ReactNode }) {
+  const [expanded, setExpanded] = useState(false);
+  const visible = expanded ? items : items.slice(0, initialCount);
+  return <><div className={className}>{visible.map(renderItem)}</div>{items.length > initialCount && <button type="button" className="button button-small button-quiet show-more-list-button" onClick={() => setExpanded((value) => !value)}>{expanded ? "Show less" : `Show more (${items.length - initialCount})`}</button>}</>;
 }
 
 function IncidentsPage({ data, user, openModal, run }: { data: AppData; user: Profile; openModal: (state: ModalState) => void; run: (action: string, payload?: Record<string, unknown>) => Promise<void> }) {
@@ -1625,7 +1774,7 @@ function IncidentsPage({ data, user, openModal, run }: { data: AppData; user: Pr
   return <><PageIntro title="Incident log" detail="Record equipment faults, production interruptions, and follow-up actions. Urgent issues are surfaced to media leads." />
     <div className="incident-summary"><div><span>Open</span><strong>{incidents.filter((item) => ["Open", "Acknowledged", "In progress"].includes(item.status)).length}</strong></div><div><span>High severity</span><strong className="danger-text">{incidents.filter((item) => ["High", "Critical"].includes(item.severity) && !["Resolved", "Closed"].includes(item.status)).length}</strong></div><div><span>Resolved</span><strong>{incidents.filter((item) => item.status === "Resolved").length}</strong></div></div>
     {canReport && <div className="incident-toolbar">{canEditCategories && <CategoryManagerButton kind="incidents" openModal={openModal} />}<button className="button button-primary button-small" onClick={() => openModal({ type: "report-incident" })}><Plus size={14} />Report issue</button></div>}
-    {incidents.length ? <div className="incident-list">{incidents.map((incident) => { const reporter = data.profiles.find((item) => item.id === incident.reportedBy); const event = data.events.find((item) => item.id === incident.eventId); const asset = data.assets.find((item) => item.id === incident.assetId); const severityTone = ["Critical", "High"].includes(incident.severity) ? "danger" : incident.severity === "Medium" ? "warning" : "neutral"; const ownIncident = incident.reportedBy === user.id; return <article className="incident-card" key={incident.id}><span className={`incident-icon incident-${severityTone}`}><AlertTriangle size={18} /></span><div className="incident-main"><div className="incident-title-row"><div><span className="eyebrow">{incident.category} · {formatStamp(incident.createdAt)}</span><h3>{incident.description}</h3></div><StatusPill tone={severityTone}>{incident.severity}</StatusPill></div><div className="incident-meta"><span>Reported by <strong>{reporter?.fullName ?? "Team member"}</strong></span>{event && <span><CalendarDays size={13} />{event.title}</span>}{asset && <span><HardDrive size={13} />{asset.assetCode} · {asset.name}</span>}<StatusPill tone={incident.status === "Resolved" || incident.status === "Closed" ? "success" : incident.status === "Open" ? "warning" : "neutral"}>{incident.status}</StatusPill></div><p className="incident-full-description">{incident.description}</p>{incident.immediateAction && <div className="resolution-note"><Wrench size={14} /><strong>Action taken:</strong> {incident.immediateAction}</div>}{incident.photos?.length ? <div className="incident-attachments">{incident.photos.map((photo, index) => <a href={photo} target="_blank" rel="noreferrer" key={`${incident.id}-photo-${index}`}><NextImage unoptimized src={photo} alt={`Incident evidence ${index + 1}`} width={140} height={100} /></a>)}</div> : null}{incident.resolution && <div className="resolution-note"><CheckCircle2 size={14} /><strong>Job completed:</strong> {incident.resolution}</div>}{ownIncident && !["Resolved", "Closed"].includes(incident.status) && <button className="button button-small button-quiet incident-resolve" onClick={() => openModal({ type: "complete-own-incident", id: incident.id })}>Mark job completed</button>}{isAdmin && !["Resolved", "Closed"].includes(incident.status) && <button className="button button-small button-quiet incident-resolve" onClick={() => openModal({ type: "resolve-incident", id: incident.id })}>Record resolution</button>}{isAdmin && <button className="button button-small button-quiet incident-resolve" onClick={() => openModal({ type: "edit-incident", id: incident.id })}>Edit incident</button>}{isAdministrator && <button className="button button-small button-quiet danger-text incident-resolve" title="Permanently delete this incident" onClick={() => { if (window.confirm(`Delete this incident reported by ${reporter?.fullName ?? "a team member"}? This cannot be undone.`)) void run("delete_incident", { incidentId: incident.id }); }}><Trash2 size={13} />Delete incident</button>}</div></article>; })}</div> : <EmptyState icon={CheckCircle2} title="No incidents reported" detail="When a fault or interruption occurs, record it so the team can follow through." action={canReport && <button className="button button-primary" onClick={() => openModal({ type: "report-incident" })}><Plus size={15} />Report issue</button>} />}
+    {incidents.length ? <ShowMoreList items={incidents} className="incident-list" initialCount={8} renderItem={(incident) => { const reporter = data.profiles.find((item) => item.id === incident.reportedBy); const event = data.events.find((item) => item.id === incident.eventId); const asset = data.assets.find((item) => item.id === incident.assetId); const severityTone = ["Critical", "High"].includes(incident.severity) ? "danger" : incident.severity === "Medium" ? "warning" : "neutral"; const ownIncident = incident.reportedBy === user.id; return <article className="incident-card" key={incident.id}><span className={`incident-icon incident-${severityTone}`}><AlertTriangle size={18} /></span><div className="incident-main"><div className="incident-title-row"><div><span className="eyebrow">{incident.category} · {formatStamp(incident.createdAt)}</span><h3>{incident.description}</h3></div><StatusPill tone={severityTone}>{incident.severity}</StatusPill></div><div className="incident-meta"><span>Reported by <strong>{reporter?.fullName ?? "Team member"}</strong></span>{event && <span><CalendarDays size={13} />{event.title}</span>}{asset && <span><HardDrive size={13} />{asset.assetCode} · {asset.name}</span>}<StatusPill tone={incident.status === "Resolved" || incident.status === "Closed" ? "success" : incident.status === "Open" ? "warning" : "neutral"}>{incident.status}</StatusPill></div><p className="incident-full-description">{incident.description}</p>{incident.immediateAction && <div className="resolution-note"><Wrench size={14} /><strong>Action taken:</strong> {incident.immediateAction}</div>}{incident.photos?.length ? <div className="incident-attachments">{incident.photos.map((photo, index) => <a href={photo} target="_blank" rel="noreferrer" key={`${incident.id}-photo-${index}`}><NextImage unoptimized src={photo} alt={`Incident evidence ${index + 1}`} width={140} height={100} /></a>)}</div> : null}{incident.resolution && <div className="resolution-note"><CheckCircle2 size={14} /><strong>Job completed:</strong> {incident.resolution}</div>}{ownIncident && !["Resolved", "Closed"].includes(incident.status) && <button className="button button-small button-quiet incident-resolve" onClick={() => openModal({ type: "complete-own-incident", id: incident.id })}>Mark job completed</button>}{isAdmin && !["Resolved", "Closed"].includes(incident.status) && <button className="button button-small button-quiet incident-resolve" onClick={() => openModal({ type: "resolve-incident", id: incident.id })}>Record resolution</button>}{isAdmin && <button className="button button-small button-quiet incident-resolve" onClick={() => openModal({ type: "edit-incident", id: incident.id })}>Edit incident</button>}{isAdministrator && <button className="button button-small button-quiet danger-text incident-resolve" title="Permanently delete this incident" onClick={() => { if (window.confirm(`Delete this incident reported by ${reporter?.fullName ?? "a team member"}? This cannot be undone.`)) void run("delete_incident", { incidentId: incident.id }); }}><Trash2 size={13} />Delete incident</button>}</div></article>; }} /> : <EmptyState icon={CheckCircle2} title="No incidents reported" detail="When a fault or interruption occurs, record it so the team can follow through." action={canReport && <button className="button button-primary" onClick={() => openModal({ type: "report-incident" })}><Plus size={15} />Report issue</button>} />}
   </>;
 }
 
@@ -1698,7 +1847,7 @@ function NotificationsPage({ data, user, run, currentTime }: { data: AppData; us
       <button type="button" className={managerView === "received" ? "selected" : ""} role="tab" aria-selected={managerView === "received"} onClick={() => { setManagerView("received"); setShowAll(false); }}>Received</button>
       <button type="button" className={managerView === "sent" ? "selected" : ""} role="tab" aria-selected={managerView === "sent"} onClick={() => { setManagerView("sent"); setShowAll(false); }}>Sent</button>
     </div>{managerView === "received" && <button className={`button button-small ${showAll ? "button-primary" : "button-quiet"}`} onClick={() => setShowAll((value) => !value)}>{showAll ? "Show unread only" : "Read receipts"}</button>}</div>}
-    {notifications.length ? <div className="notification-list">{notifications.map((item) => {
+    {notifications.length ? <ShowMoreList items={notifications} className="notification-list" initialCount={8} renderItem={(item) => {
       const recipient = data.profiles.find((profile) => profile.id === item.userId);
       const alarmId = item.href.startsWith("time-alarm:") ? item.href.slice("time-alarm:".length) : "";
       const alarm = alarmId ? data.timeAlarms.find((entry) => entry.id === alarmId) : undefined;
@@ -1712,7 +1861,7 @@ function NotificationsPage({ data, user, run, currentTime }: { data: AppData; us
         </span>
         {canCompleteAlarm ? <button type="button" className="button button-small button-primary" onClick={() => void run("complete_time_alarm", { alarmId })}>Task completed</button> : canMarkRead ? <button type="button" className="button button-small button-quiet" onClick={() => void run("mark_notification_read", { notificationId: item.id })}>Mark read</button> : item.read ? <CheckCircle2 size={15} aria-label="Read" /> : <span className="notification-unread-dot" />}
       </article>;
-    })}</div> : <EmptyState icon={Bell} title={manager ? managerView === "sent" ? "No notifications sent" : showAll ? "No notifications received" : "You're all caught up" : "You're all caught up"} detail={manager && managerView === "sent" ? "Notifications created by your team actions will appear here." : manager && showAll ? "New incidents, completed checklist work, and other updates sent to you will appear here." : "New event, checklist, incident, and equipment updates will appear here."} />}
+    }} /> : <EmptyState icon={Bell} title={manager ? managerView === "sent" ? "No notifications sent" : showAll ? "No notifications received" : "You're all caught up" : "You're all caught up"} detail={manager && managerView === "sent" ? "Notifications created by your team actions will appear here." : manager && showAll ? "New incidents, completed checklist work, and other updates sent to you will appear here." : "New event, checklist, incident, and equipment updates will appear here."} />}
   </>;
 }
 
@@ -1841,10 +1990,10 @@ function Modal({ state, data, user, context, onClose, openModal, onSubmit, run, 
     {state.type === "create-checklist-item" && <form onSubmit={onSubmit("create_checklist_item")} className="modal-form"><div className="form-grid"><Field label="Team member" name="userId" as="select" required options={people.map((item) => ({ value: item.id, label: `${item.fullName} · ${item.jobTitle || item.role}` }))} /><Field label="Event" name="eventId" as="select" required options={eventOptions.map((item) => ({ value: item.id, label: `${item.title} · ${displayDate(item.date)}` }))} /></div><Field label="Program phase" name="programPhase" as="select" required options={phaseOptions(data).map((phase) => ({ value: phase, label: phase }))} defaultValue={normalizeChecklistProgramPhase(eventOptions[0]?.programPhase) ?? phaseOptions(data)[0]} /><Field label="Checklist item" name="label" required minLength={2} placeholder="e.g. Confirm camera feed and framing" /><CheckboxField name="required" label="Required before the event" checked /><div className="modal-help">This checklist item appears only to the selected member and the administrator.</div><ModalActions onClose={onClose} primary="Add checklist item" /></form>}
     {state.type === "edit-checklist-item" && checklistItem && <form onSubmit={onSubmit("update_checklist_item")} className="modal-form"><input type="hidden" name="itemId" value={checklistItem.id} /><div className="context-callout"><ClipboardCheck size={17} /><span><strong>{checklistPerson?.fullName ?? "Team member"}</strong><small>{checklistPerson?.jobTitle ?? checklistPerson?.role ?? "Production role"} · {checklistEvent?.title ?? "Event"}</small></span></div><Field label="Checklist item" name="label" required minLength={2} defaultValue={checklistItem.label} /><Field label="Program phase" name="programPhase" as="select" required options={phaseOptions(data).map((phase) => ({ value: phase, label: phase }))} defaultValue={checklistItem.programPhase ?? phaseOptions(data)[0]} /><CheckboxField name="required" label="Required before the event" checked={checklistItem.required} /><div className="modal-help">Editing the wording or requirement keeps the current completion status. Required incomplete tasks turn urgent when the event moves to a later phase.</div><ModalActions onClose={onClose} primary="Save checklist item" /></form>}
     {state.type === "delete-checklist-item" && checklistItem && <form onSubmit={onSubmit("delete_checklist_item")} className="modal-form"><input type="hidden" name="itemId" value={checklistItem.id} /><div className="context-callout danger-callout"><Trash2 size={17} /><span><strong>{checklistItem.label}</strong><small>{checklistPerson?.fullName ?? "Assigned member"} · {checklistEvent?.title ?? "Event"}</small></span></div><p className="review-copy">This removes the item from the assigned member’s checklist.</p><ModalActions onClose={onClose} primary="Remove checklist item" /></form>}
-    {state.type === "invite-member" && <form onSubmit={onSubmit("team_invite")} className="modal-form"><label className="form-field"><span>Start with one of the team positions you gave me</span><select name="teamPreset" defaultValue="" onChange={(event) => { const preset = teamInvitePresets.find((item) => item.id === event.currentTarget.value); const form = event.currentTarget.form; if (!preset || !form) return; (form.elements.namedItem("fullName") as HTMLInputElement).value = preset.fullName; (form.elements.namedItem("username") as HTMLInputElement).value = preset.username; for (const input of form.querySelectorAll<HTMLInputElement>(`input[name="productionRoles"]`)) input.checked = preset.productionRoles.includes(input.value); for (const input of form.querySelectorAll<HTMLInputElement>(`input[name="accessRoles"]`)) input.checked = preset.accessRoles.includes(input.value as AppRole); }}><option value="">Choose a person or enter details below</option>{teamInvitePresets.filter((preset) => actorIsAdministrator || preset.id !== "jaafar").map((preset) => <option value={preset.id} key={preset.id}>{preset.fullName} · {preset.productionRoles.join(" · ")}</option>)}</select></label><div className="form-grid"><Field label="Full name" name="fullName" required placeholder="Team member name" /><Field label="Username" name="username" required placeholder="first.last" />{context.mode === "supabase" && <Field label="Sign-in email" name="email" type="email" required placeholder="name@example.org" />}</div><div className="form-grid"><ProductionRoleFields selected={["Videography"]} /><AccessRoleFields selected={["Videographer"]} includeAdministrator={actorIsAdministrator} /></div><ProfilePhotoField name="avatarUrl" personName="New team member" /><div className="modal-help">{context.mode === "demo" ? "A temporary password is generated and shown once after saving. Share it privately; the admin can reset it any time." : "The person receives a secure password setup email. The administrator can reset their password later."}</div><ModalActions onClose={onClose} primary={context.mode === "demo" ? "Create account" : "Send invitation"} /></form>}
+      {state.type === "invite-member" && <form onSubmit={onSubmit("team_invite")} className="modal-form"><label className="form-field"><span>Start with one of the team positions you gave me</span><select name="teamPreset" defaultValue="" onChange={(event) => { const preset = teamInvitePresets.find((item) => item.id === event.currentTarget.value); const form = event.currentTarget.form; if (!preset || !form) return; (form.elements.namedItem("fullName") as HTMLInputElement).value = preset.fullName; (form.elements.namedItem("username") as HTMLInputElement).value = preset.username; for (const input of form.querySelectorAll<HTMLInputElement>(`input[name="productionRoles"]`)) input.checked = preset.productionRoles.includes(input.value); for (const input of form.querySelectorAll<HTMLInputElement>(`input[name="accessRoles"]`)) input.checked = preset.accessRoles.includes(input.value as AppRole); }}><option value="">Choose a person or enter details below</option>{teamInvitePresets.filter((preset) => actorIsAdministrator || preset.id !== "jaafar").map((preset) => <option value={preset.id} key={preset.id}>{preset.fullName} · {preset.productionRoles.join(" · ")}</option>)}</select></label><div className="form-grid"><Field label="Full name" name="fullName" required placeholder="Team member name" /><Field label="Username" name="username" required placeholder="first.last" />{context.mode === "supabase" && <Field label="Sign-in email" name="email" type="email" required placeholder="name@example.org" />}</div><div className="form-grid"><ProductionRoleFields selected={["Videography"]} roles={data.categories?.productionRoles ?? productionPositions} /><AccessRoleFields selected={["Videographer"]} includeAdministrator={actorIsAdministrator} /></div><ProfilePhotoField name="avatarUrl" personName="New team member" /><div className="modal-help">{context.mode === "demo" ? "A temporary password is generated and shown once after saving. Share it privately; the admin can reset it any time." : "The person receives a secure password setup email. The administrator can reset their password later."}</div><ModalActions onClose={onClose} primary={context.mode === "demo" ? "Create account" : "Send invitation"} /></form>}
      {state.type === "edit-member-roles" && member && <form onSubmit={onSubmit("team_update_roles")} className="modal-form"><input type="hidden" name="memberId" value={member.id} /><p>Choose the app permissions for this account. The account login itself stays unchanged.</p><AccessRoleFields selected={member.accessRoles ?? [member.role]} includeAdministrator={actorIsAdministrator} /><div className="modal-help">Directors can manage non-administrator roles. Only an administrator can grant or remove Administrator access.</div><ModalActions onClose={onClose} primary="Save access roles" /></form>}
      {state.type === "invite-member" && <form onSubmit={onSubmit("team_invite")} className="modal-form"><label className="form-field"><span>Start with one of the team positions you gave me</span><select name="teamPreset" defaultValue="" onChange={(event) => { const preset = teamInvitePresets.find((item) => item.id === event.currentTarget.value); const form = event.currentTarget.form; if (!preset || !form) return; (form.elements.namedItem("fullName") as HTMLInputElement).value = preset.fullName; (form.elements.namedItem("username") as HTMLInputElement).value = preset.username; for (const input of form.querySelectorAll<HTMLInputElement>(`input[name="productionRoles"]`)) input.checked = preset.productionRoles.includes(input.value); for (const input of form.querySelectorAll<HTMLInputElement>(`input[name="accessRoles"]`)) input.checked = preset.accessRoles.includes(input.value as AppRole); }}><option value="">Choose a person or enter details below</option>{teamInvitePresets.filter((preset) => actorIsAdministrator || preset.id !== "jaafar").map((preset) => <option value={preset.id} key={preset.id}>{preset.fullName} · {preset.productionRoles.join(" · ")}</option>)}</select></label><div className="form-grid"><Field label="Full name" name="fullName" required placeholder="Team member name" /><Field label="Username" name="username" required placeholder="first.last" />{context.mode === "supabase" && <Field label="Sign-in email" name="email" type="email" required placeholder="name@example.org" />}</div><div className="form-grid"><ProductionRoleFields selected={["Videography"]} /><AccessRoleFields selected={["Videographer"]} includeAdministrator={actorIsAdministrator} /></div><ProfilePhotoField name="avatarUrl" personName="New team member" /><div className="modal-help">{context.mode === "demo" ? "A temporary password is generated and shown once after saving. Share it privately; the admin can reset it any time." : "The person receives a secure password setup email. The administrator can reset their password later."}</div><ModalActions onClose={onClose} primary={context.mode === "demo" ? "Create account" : "Send invitation"} /></form>}
-    {state.type === "edit-member" && member && <form onSubmit={onSubmit("team_update_member")} className="modal-form"><input type="hidden" name="memberId" value={member.id} /><div className="form-grid"><Field label="Full name" name="fullName" required defaultValue={member.fullName} /><Field label="Username" name="username" required defaultValue={member.username} />{context.mode === "supabase" && <Field label="Sign-in email" name="email" type="email" required defaultValue={member.email} />}</div><div className="form-grid"><ProductionRoleFields selected={selectedProductionRoles(member.jobTitle)} /><AccessRoleFields selected={member.accessRoles ?? [member.role]} includeAdministrator={actorIsAdministrator} /></div><ProfilePhotoField name="avatarUrl" personName={member.fullName} initialValue={member.avatarUrl} /><CheckboxField name="active" label="Account is active" checked={member.active} /><div className="modal-help">Select every production role this person handles. App access permissions remain separate.</div><div className="modal-help">Only administrators can change administrator accounts or grant administrator access. Directors can manage the other team accounts.</div><ModalActions onClose={onClose} primary="Save account" /></form>}
+     {state.type === "edit-member" && member && <form onSubmit={onSubmit("team_update_member")} className="modal-form"><input type="hidden" name="memberId" value={member.id} /><div className="form-grid"><Field label="Full name" name="fullName" required defaultValue={member.fullName} /><Field label="Username" name="username" required defaultValue={member.username} />{context.mode === "supabase" && <Field label="Sign-in email" name="email" type="email" required defaultValue={member.email} />}</div><div className="form-grid"><ProductionRoleFields selected={selectedProductionRoles(member.jobTitle, data.categories?.productionRoles ?? productionPositions)} roles={data.categories?.productionRoles ?? productionPositions} /><AccessRoleFields selected={member.accessRoles ?? [member.role]} includeAdministrator={actorIsAdministrator} /></div><ProfilePhotoField name="avatarUrl" personName={member.fullName} initialValue={member.avatarUrl} /><CheckboxField name="active" label="Account is active" checked={member.active} /><div className="modal-help">Select every production role this person handles. App access permissions remain separate.</div><div className="modal-help">Only administrators can change administrator accounts or grant administrator access. Directors can manage the other team accounts.</div><ModalActions onClose={onClose} primary="Save account" /></form>}
     {state.type === "set-member-password" && member && <form onSubmit={onSubmit("team_set_password")} className="modal-form"><input type="hidden" name="memberId" value={member.id} /><PasswordField label="New password" name="password" autoComplete="new-password" minLength={4} /><PasswordField label="Confirm new password" name="confirmPassword" autoComplete="new-password" minLength={4} /><div className="modal-help">Use at least 4 characters. The password is stored as a secure hash and cannot be viewed later. Share the new password privately; the member can change it from their profile after signing in.</div><ModalActions onClose={onClose} primary="Set password" /></form>}
     {state.type === "credential-reveal" && <div className="modal-form credential-reveal"><div className="modal-help">This temporary password is shown only now. Save it and give it to the account owner privately. The administrator can set a replacement any time.</div><label className="form-field"><span>Username</span><input readOnly value={state.username ?? ""} /></label><label className="form-field"><span>Temporary password</span><input readOnly value={state.secret ?? ""} /></label><button type="button" className="button button-primary full-button" onClick={(event) => { void navigator.clipboard.writeText(`Username: ${state.username ?? ""}\nTemporary password: ${state.secret ?? ""}`); event.currentTarget.textContent = "Copied login details"; }}>Copy login details</button><div className="modal-actions"><button type="button" className="button button-quiet" onClick={onClose}>Done</button></div></div>}
     {(state.type === "create-event" || state.type === "edit-event") && <form onSubmit={onSubmit(state.type === "create-event" ? "create_event" : "update_event")} className="modal-form">{event && <input type="hidden" name="eventId" value={event.id} />}<div className="form-grid"><Field label="Event title" name="title" required placeholder="e.g. Friday Community Program" defaultValue={event?.title} /><Field label="Category" name="category" as="select" required options={data.categories?.events?.length ? data.categories.events : categoryDefaults.events} defaultValue={event?.category ?? "General"} /><Field label="Date" name="date" type="date" required defaultValue={event?.date} /><Field label="Venue" name="venue" required placeholder="Room or hall" defaultValue={event?.venue ?? "To be confirmed"} /><Field label="Start time" name="startTime" type="time" defaultValue={event?.startTime} /><Field label="End time" name="endTime" type="time" defaultValue={event?.endTime} /><Field label="Setup / arrival time" name="setupTime" type="time" defaultValue={event?.setupTime} /><Field label="Event lead" name="leadId" as="select" options={[{ value: "none", label: "Unassigned" }, ...people.map((item) => ({ value: item.id, label: `${item.fullName} · ${item.jobTitle || item.role}` }))]} defaultValue={event ? event.leadId || "none" : user.id} /></div><CrewAssignmentFields profiles={people} selectedIds={event ? data.assignments.filter((item) => item.eventId === event.id).map((item) => item.userId) : people.map((item) => item.id)} /><Field label="Description" name="description" as="textarea" placeholder="Production overview and event purpose" defaultValue={event?.description} /><div className="checkbox-row"><CheckboxField name="livestream" label="Livestream required" checked={event?.livestream ?? false} /><CheckboxField name="recording" label="Recording required" checked={event?.recording ?? false} /><CheckboxField name="photography" label="Photography required" checked={event?.photography ?? false} /></div>{event && <div className="modal-help">Current coverage: {[event.livestream && "Livestream", event.recording && "Recording", event.photography && "Photography"].filter(Boolean).join(" · ") || "Standard"}. Recheck these options if updating the event.</div>}<Field label="Public event information" name="publicInfo" as="textarea" placeholder="Information appropriate for event attendees" defaultValue={event?.publicInfo} /><Field label="Private production notes" name="privateNotes" as="textarea" placeholder="Internal instructions visible to authorized media staff" defaultValue={event?.privateNotes} /><ModalActions onClose={onClose} primary={event ? "Save event changes" : "Save draft event"} /></form>}
@@ -1919,8 +2068,8 @@ function PasswordField({ label, name, autoComplete, minLength }: { label: string
 
 function CheckboxField({ name, label, required = false, checked = false }: { name: string; label: string; required?: boolean; checked?: boolean }) { return <label className="checkbox-field"><input name={name} type="checkbox" required={required} defaultChecked={checked} /><span>{label}</span></label>; }
 
-function ProductionRoleFields({ selected }: { selected: string[] }) {
-  return <fieldset className="form-field access-role-field production-role-field"><legend>Production roles</legend><div className="access-role-grid">{productionPositions.map((role) => <label className="checkbox-field" key={role}><input name="productionRoles" type="checkbox" value={role} defaultChecked={selected.includes(role)} /><span>{role}</span></label>)}</div><small>Select all production jobs this person handles. These do not change their app access.</small></fieldset>;
+function ProductionRoleFields({ selected, roles = productionPositions }: { selected: string[]; roles?: string[] }) {
+  return <fieldset className="form-field access-role-field production-role-field"><legend>Production roles</legend><div className="access-role-grid">{roles.map((role) => <label className="checkbox-field" key={role}><input name="productionRoles" type="checkbox" value={role} defaultChecked={selected.includes(role)} /><span>{role}</span></label>)}</div><small>Select all production jobs this person handles. Administrators can add or remove roles from Team member accounts.</small></fieldset>;
 }
 
 function AccessRoleFields({ selected, includeAdministrator = true }: { selected: AppRole[]; includeAdministrator?: boolean }) {

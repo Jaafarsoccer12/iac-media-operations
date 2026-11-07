@@ -24,7 +24,7 @@ type DbSopVersion = { id: string; version: number; purpose: string; reviewed_at:
 type DbEventActivity = { id: string; event_id: string; actor_id: string | null; action: string; summary: string; metadata: Record<string, unknown> | null; occurred_at: string };
 type DbSop = { id: string; title: string; category: string; status: AppData["sops"][number]["status"]; current_version_id: string | null; updated_at: string; available_to_all: boolean | null; assigned_user_ids: string[] | null; sop_versions: DbSopVersion[] };
 type DbIncident = { id: string; event_id: string | null; asset_id: string | null; reported_by: string; category: string; severity: AppData["incidents"][number]["severity"]; description: string; immediate_action: string | null; photos: string[] | null; status: AppData["incidents"][number]["status"]; created_at: string; resolution_notes: string | null };
-type DbCategory = { category_type: keyof NonNullable<AppData["categories"]>; category_name: string; sort_order?: number };
+type DbCategory = { category_type: "equipment" | "sops" | "incidents" | "checklists" | "events" | "production_roles"; category_name: string; sort_order?: number };
 type DbNotification = { id: string; user_id: string; sender_id?: string | null; title: string; body: string; created_at: string; read_at: string | null; href: string | null };
 type DbContent = { id: string; event_id: string; title: string; content_type: string; stage: string; assigned_editor_id: string | null; due_date: string | null; assigned_reviewer_id: string | null; storage_link: string | null };
 type DbAudit = { id: string; actor_id: string | null; action: string; target_type: string; target_id: string | null; created_at: string };
@@ -71,7 +71,8 @@ export async function GET() {
 
   if (context.mode === "demo") {
     const data = filterDemoData(await readDemoStore(), context.user.id, normalizeAccessRoles(context.user.accessRoles, context.user.role));
-    data.categories ??= { equipment: ["Camera", "Audio", "Wiring", "Video", "Lighting", "Other"], sops: ["Production", "Audio", "Video", "Livestream & recording", "Equipment", "Operations", "Safety"], incidents: ["Equipment damage", "Audio issue", "Video issue", "Stream interruption", "Recording issue", "Network", "Other"], checklists: orderChecklistProgramPhases([]), events: ["Happy", "Sad", "General"] };
+    data.categories ??= { equipment: ["Camera", "Audio", "Wiring", "Video", "Lighting", "Other"], sops: ["Production", "Audio", "Video", "Livestream & recording", "Equipment", "Operations", "Safety"], incidents: ["Equipment damage", "Audio issue", "Video issue", "Stream interruption", "Recording issue", "Network", "Other"], checklists: orderChecklistProgramPhases([]), events: ["Happy", "Sad", "General"], productionRoles: ["Camera Operator", "PTZ Camera Operator", "Video Operator", "Audio Operator", "Equipment Manager", "Photography", "Video Switcher Operator", "Videography", "Director"] };
+    data.categories.productionRoles ??= ["Camera Operator", "PTZ Camera Operator", "Video Operator", "Audio Operator", "Equipment Manager", "Photography", "Video Switcher Operator", "Videography", "Director"];
     return NextResponse.json({ context, data });
   }
 
@@ -146,6 +147,7 @@ export async function GET() {
         incidents: categoryRows.filter((row) => row.category_type === "incidents").map((row) => row.category_name),
         checklists: orderChecklistProgramPhases(categoryRows.filter((row) => row.category_type === "checklists").sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)).map((row) => row.category_name)),
         events: categoryRows.filter((row) => row.category_type === "events").map((row) => row.category_name),
+        productionRoles: categoryRows.filter((row) => row.category_type === "production_roles").sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)).map((row) => row.category_name),
       },
       notifications: notificationRows.map((n) => ({ id: n.id, userId: n.user_id, senderId: n.sender_id ?? undefined, title: n.title, detail: n.body, date: n.created_at, read: Boolean(n.read_at), readAt: n.read_at ?? undefined, href: n.href ?? "dashboard" })),
       timeAlarms: timeAlarmRows.map((alarm) => ({ id: alarm.id, userId: alarm.user_id, createdBy: alarm.created_by, fireAt: alarm.fire_at, description: alarm.description, triggeredAt: alarm.triggered_at ?? undefined, cancelledAt: alarm.cancelled_at ?? undefined, completedAt: alarm.completed_at ?? undefined })),
