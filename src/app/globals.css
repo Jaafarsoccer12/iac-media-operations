@@ -1666,11 +1666,8 @@ html[data-theme="dark"] .alarm-countdown-widget-copy em { color: hsl(var(--alarm
   .event-report-backdrop,
   .event-report-backdrop * { visibility: visible !important; }
   body:has(.event-report-backdrop) { min-height: 0 !important; background: #fff !important; }
-  body:has(.event-report-backdrop) .sidebar,
-  body:has(.event-report-backdrop) .topbar { display: none !important; }
-  body:has(.event-report-backdrop) .main-column { min-height: 0 !important; margin: 0 !important; }
-  body:has(.event-report-backdrop) .main-content { display: block !important; width: 100% !important; max-width: none !important; height: auto !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; overflow: visible !important; }
-  body:has(.event-report-backdrop) .main-content > :not(.event-report-backdrop) { display: none !important; }
+  body:has(.event-report-backdrop) .app-shell { display: block !important; min-height: 0 !important; height: auto !important; overflow: visible !important; background: #fff !important; }
+  body:has(.event-report-backdrop) .app-shell > :not(.event-report-backdrop) { display: none !important; }
   .event-report-backdrop { position: static !important; inset: auto !important; display: block !important; padding: 0 !important; overflow: visible !important; background: #fff !important; }
   .modal-event-report { position: static !important; width: 100% !important; height: auto !important; max-height: none !important; overflow: visible !important; border: 0 !important; box-shadow: none !important; }
   .modal-event-report .modal-head { position: static !important; border-bottom: 1px solid #bbb !important; }
