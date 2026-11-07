@@ -272,3 +272,27 @@ test("logout clears access to protected records", async () => {
   const blocked = await request("/api/bootstrap", { cookie });
   assert.equal(blocked.response.status, 401);
 });
+
+test("crew chat replies attach to a parent in the same conversation", async () => {
+  const parentResult = await request("/api/chat", {
+    method: "POST",
+    cookie: cookies["demo-admin"],
+    body: { conversationType: "all", body: "Temporary parent message for the reply test." },
+  });
+  assert.equal(parentResult.response.status, 200, parentResult.json.error);
+  const parent = parentResult.json.message;
+  assert.ok(parent?.id);
+
+  const replyResult = await request("/api/chat", {
+    method: "POST",
+    cookie: cookies["demo-admin"],
+    body: { conversationType: "all", body: "Temporary reply test.", replyToId: parent.id },
+  });
+  assert.equal(replyResult.response.status, 200, replyResult.json.error);
+  assert.equal(replyResult.json.message.replyToId, parent.id);
+
+  const conversation = await request("/api/chat", { cookie: cookies["demo-admin"] });
+  assert.equal(conversation.response.status, 200, conversation.json.error);
+  const reply = conversation.json.messages.find((message) => message.id === replyResult.json.message.id);
+  assert.equal(reply?.reply?.id, parent.id);
+});
